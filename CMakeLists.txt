@@ -7,6 +7,8 @@ add_executable(PanningWallpaper WIN32
     src/application.h
     src/desktop_host.cpp
     src/desktop_host.h
+    src/image_decoder.cpp
+    src/image_decoder.h
     src/main.cpp
     src/renderer.cpp
     src/renderer.h
@@ -32,5 +34,9 @@ endif()
 
 target_link_libraries(PanningWallpaper PRIVATE
     d3d11
+    d3dcompiler
     dxgi
+    ole32
+    shell32
+    windowscodecs
 )

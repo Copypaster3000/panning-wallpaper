@@ -1,7 +1,12 @@
 #include "application.h"
 
 #include "desktop_host.h"
+#include "image_decoder.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <format>
 #include <string_view>
 
@@ -9,6 +14,8 @@ namespace panning_wallpaper {
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PanningWallpaper.RenderSurface";
+constexpr auto kFrameInterval = std::chrono::nanoseconds{1'000'000'000 / 30};
+constexpr double kLoopDurationSeconds = 90.0;
 
 [[nodiscard]] std::wstring FormatSystemError(std::wstring_view operation) {
     return std::format(
@@ -28,8 +35,16 @@ Application::~Application() {
     }
 }
 
-bool Application::Initialize(HINSTANCE instance, std::wstring& error) {
+bool Application::Initialize(
+    HINSTANCE instance,
+    std::wstring_view imagePath,
+    std::wstring& error) {
     instance_ = instance;
+
+    DecodedImage image;
+    if (!DecodeImageFile(imagePath, image, error)) {
+        return false;
+    }
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -73,13 +88,23 @@ bool Application::Initialize(HINSTANCE instance, std::wstring& error) {
         return false;
     }
 
-    HRESULT result = renderer_.Initialize(window_);
+    std::wstring rendererError;
+    HRESULT result = renderer_.Initialize(window_, image, rendererError);
     if (FAILED(result)) {
-        error = std::format(
-            L"Direct3D initialization failed with HRESULT 0x{:08X}.",
-            static_cast<unsigned long>(result));
+        if (rendererError.empty()) {
+            error = std::format(
+                L"Direct3D image renderer initialization failed with HRESULT 0x{:08X}.",
+                static_cast<unsigned long>(result));
+        } else {
+            error = std::format(
+                L"Shader compilation failed with HRESULT 0x{:08X}:\n{}",
+                static_cast<unsigned long>(result),
+                rendererError);
+        }
         return false;
     }
+    // The immutable GPU texture now owns the image data needed at runtime.
+    image = {};
 
     if (!RegisterHotKey(
             window_,
@@ -91,7 +116,8 @@ bool Application::Initialize(HINSTANCE instance, std::wstring& error) {
     }
 
     ShowWindow(window_, SW_SHOWNOACTIVATE);
-    result = renderer_.RenderAndPresent();
+    animationStart_ = std::chrono::steady_clock::now();
+    result = RenderCurrentFrame();
     if (FAILED(result)) {
         error = std::format(
             L"The initial Direct3D frame could not be presented (HRESULT 0x{:08X}).",
@@ -103,20 +129,61 @@ bool Application::Initialize(HINSTANCE instance, std::wstring& error) {
 }
 
 int Application::Run() {
-    MSG message{};
-    while (true) {
-        const BOOL result = GetMessageW(&message, nullptr, 0, 0);
-        if (result == 0) {
-            return static_cast<int>(message.wParam);
+    auto nextFrame = std::chrono::steady_clock::now() + kFrameInterval;
+    int exitCode = 0;
+    bool running = true;
+
+    while (running) {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                exitCode = static_cast<int>(message.wParam);
+                running = false;
+                break;
+            }
+
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
-        if (result == -1) {
-            runtimeError_ = FormatSystemError(L"GetMessageW");
-            return 1;
+        if (!running) {
+            break;
         }
 
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+        const auto now = std::chrono::steady_clock::now();
+        if (runtimeError_.empty() && now >= nextFrame) {
+            const HRESULT result = RenderCurrentFrame();
+            if (FAILED(result)) {
+                CloseAfterFailure(L"Animation frame presentation", result);
+            }
+
+            const auto afterRender = std::chrono::steady_clock::now();
+            const auto missedIntervals =
+                (afterRender - nextFrame) / kFrameInterval + 1;
+            nextFrame += kFrameInterval * missedIntervals;
+            continue;
+        }
+
+        DWORD timeoutMilliseconds = INFINITE;
+        if (runtimeError_.empty()) {
+            const auto remaining = nextFrame - now;
+            const auto rounded = std::chrono::ceil<std::chrono::milliseconds>(remaining);
+            timeoutMilliseconds = static_cast<DWORD>(
+                std::max<std::int64_t>(1, rounded.count()));
+        }
+
+        const DWORD waitResult = MsgWaitForMultipleObjectsEx(
+            0,
+            nullptr,
+            timeoutMilliseconds,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE);
+        if (waitResult == WAIT_FAILED) {
+            runtimeError_ = FormatSystemError(L"MsgWaitForMultipleObjectsEx");
+            return 1;
+        }
     }
+
+    return exitCode;
 }
 
 const std::wstring& Application::RuntimeError() const noexcept {
@@ -181,7 +248,7 @@ LRESULT Application::HandleMessage(
             // presents the swap chain. If the size is unchanged, display-change
             // notification itself is the one legitimate redraw condition.
             if (result == S_FALSE) {
-                result = renderer_.RenderAndPresent();
+                result = RenderCurrentFrame();
             }
             if (FAILED(result)) {
                 CloseAfterFailure(L"Desktop display change", result);
@@ -195,7 +262,7 @@ LRESULT Application::HandleMessage(
         EndPaint(window, &paint);
 
         if (renderer_.IsInitialized()) {
-            const HRESULT result = renderer_.RenderAndPresent();
+            const HRESULT result = RenderCurrentFrame();
             if (FAILED(result)) {
                 CloseAfterFailure(L"Paint presentation", result);
             }
@@ -217,7 +284,7 @@ LRESULT Application::HandleMessage(
                 static_cast<UINT>(clientRectangle.bottom - clientRectangle.top);
             HRESULT result = renderer_.Resize(width, height);
             if (SUCCEEDED(result) && width != 0 && height != 0) {
-                result = renderer_.RenderAndPresent();
+                result = RenderCurrentFrame();
             }
             if (FAILED(result)) {
                 CloseAfterFailure(L"Swap-chain resize", result);
@@ -270,6 +337,17 @@ HRESULT Application::FitToDesktopHost() {
     }
 
     return S_OK;
+}
+
+HRESULT Application::RenderCurrentFrame() {
+    return renderer_.RenderAndPresent(CurrentHorizontalOffset());
+}
+
+float Application::CurrentHorizontalOffset() const noexcept {
+    const double elapsedSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - animationStart_).count();
+    const double completedLoops = elapsedSeconds / kLoopDurationSeconds;
+    return static_cast<float>(completedLoops - std::floor(completedLoops));
 }
 
 void Application::CloseAfterFailure(std::wstring_view operation, HRESULT result) {

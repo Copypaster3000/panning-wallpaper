@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <string>
 #include <string_view>
 
@@ -17,7 +18,10 @@ public:
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
-    [[nodiscard]] bool Initialize(HINSTANCE instance, std::wstring& error);
+    [[nodiscard]] bool Initialize(
+        HINSTANCE instance,
+        std::wstring_view imagePath,
+        std::wstring& error);
     [[nodiscard]] int Run();
     [[nodiscard]] const std::wstring& RuntimeError() const noexcept;
 
@@ -36,12 +40,15 @@ private:
         WPARAM parameter,
         LPARAM secondaryParameter);
     [[nodiscard]] HRESULT FitToDesktopHost();
+    [[nodiscard]] HRESULT RenderCurrentFrame();
+    [[nodiscard]] float CurrentHorizontalOffset() const noexcept;
     void CloseAfterFailure(std::wstring_view operation, HRESULT result);
 
     HINSTANCE instance_ = nullptr;
     HWND desktopHost_ = nullptr;
     HWND window_ = nullptr;
     Renderer renderer_;
+    std::chrono::steady_clock::time_point animationStart_{};
     std::wstring runtimeError_;
 };
 
