@@ -1,0 +1,25 @@
+
+
+*~
+
+AGENTS.md
+
+# CMake
+/build/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# Build output
+Debug/
+Release/
+x64/
+x86/
+
+# Misc
+*.log
