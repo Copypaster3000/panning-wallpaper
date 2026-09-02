@@ -88,9 +88,9 @@ namespace panning_wallpaper {
 HRESULT Renderer::Initialize(
     HWND window,
     const DecodedImage& image,
-    PanDirection direction,
+    const PanningConfiguration& configuration,
     std::wstring& errorDetail) {
-    direction_ = direction;
+    configuration_ = configuration;
 
     RECT clientRectangle{};
     if (!GetClientRect(window, &clientRectangle)) {
@@ -214,7 +214,7 @@ HRESULT Renderer::RenderAndPresent(double progress) {
     }
 
     const PanTransform transform = CalculatePanTransform(
-        direction_,
+        configuration_,
         progress,
         renderWidth_,
         renderHeight_,
@@ -350,10 +350,10 @@ HRESULT Renderer::CreatePipeline(std::wstring& errorDetail) {
 
     D3D11_SAMPLER_DESC samplerDescription{};
     samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samplerDescription.AddressU = IsHorizontal(direction_)
+    samplerDescription.AddressU = IsHorizontal(configuration_.direction)
         ? D3D11_TEXTURE_ADDRESS_WRAP
         : D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.AddressV = IsHorizontal(direction_)
+    samplerDescription.AddressV = IsHorizontal(configuration_.direction)
         ? D3D11_TEXTURE_ADDRESS_CLAMP
         : D3D11_TEXTURE_ADDRESS_WRAP;
     samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;

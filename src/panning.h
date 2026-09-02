@@ -11,9 +11,16 @@ enum class PanDirection {
     Down,
 };
 
+enum class FitMode {
+    Pan,
+    Cover,
+};
+
 struct PanningConfiguration {
     PanDirection direction = PanDirection::Left;
     double loopDurationSeconds = 90.0;
+    FitMode fitMode = FitMode::Pan;
+    double position = 0.5;
 };
 
 struct PanTransform {
@@ -30,7 +37,7 @@ struct PanTransform {
     double elapsedSeconds,
     double loopDurationSeconds) noexcept;
 [[nodiscard]] PanTransform CalculatePanTransform(
-    PanDirection direction,
+    const PanningConfiguration& configuration,
     double progress,
     std::uint32_t viewportWidth,
     std::uint32_t viewportHeight,

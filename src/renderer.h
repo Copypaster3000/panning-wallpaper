@@ -16,7 +16,7 @@ public:
     [[nodiscard]] HRESULT Initialize(
         HWND window,
         const DecodedImage& image,
-        PanDirection direction,
+        const PanningConfiguration& configuration,
         std::wstring& errorDetail);
     [[nodiscard]] HRESULT Resize(UINT width, UINT height);
     [[nodiscard]] HRESULT RenderAndPresent(double progress);
@@ -44,7 +44,7 @@ private:
     UINT renderHeight_ = 0;
     UINT imageWidth_ = 0;
     UINT imageHeight_ = 0;
-    PanDirection direction_ = PanDirection::Left;
+    PanningConfiguration configuration_;
 };
 
 }  // namespace panning_wallpaper

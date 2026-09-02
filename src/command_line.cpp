@@ -25,9 +25,22 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool ParseDuration(
+[[nodiscard]] bool ParseFitMode(
+    std::wstring_view value,
+    FitMode& fitMode) noexcept {
+    if (value == L"pan") {
+        fitMode = FitMode::Pan;
+    } else if (value == L"cover") {
+        fitMode = FitMode::Cover;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool ParseFiniteNumber(
     const wchar_t* value,
-    double& durationSeconds) noexcept {
+    double& number) noexcept {
     if (value == nullptr || *value == L'\0') {
         return false;
     }
@@ -36,11 +49,35 @@ namespace {
     errno = 0;
     const double parsed = std::wcstod(value, &end);
     if (end == value || *end != L'\0' || errno == ERANGE ||
-        !std::isfinite(parsed) || parsed <= 0.0) {
+        !std::isfinite(parsed)) {
+        return false;
+    }
+
+    number = parsed;
+    return true;
+}
+
+[[nodiscard]] bool ParseDuration(
+    const wchar_t* value,
+    double& durationSeconds) noexcept {
+    double parsed = 0.0;
+    if (!ParseFiniteNumber(value, parsed) || parsed <= 0.0) {
         return false;
     }
 
     durationSeconds = parsed;
+    return true;
+}
+
+[[nodiscard]] bool ParsePosition(
+    const wchar_t* value,
+    double& position) noexcept {
+    double parsed = 0.0;
+    if (!ParseFiniteNumber(value, parsed) || parsed < 0.0 || parsed > 1.0) {
+        return false;
+    }
+
+    position = parsed;
     return true;
 }
 
@@ -71,6 +108,8 @@ bool ParseCommandLine(
 
     bool directionSeen = false;
     bool durationSeen = false;
+    bool fitSeen = false;
+    bool positionSeen = false;
     for (int index = 2; index < argumentCount; ++index) {
         const std::wstring_view argument(arguments[index]);
         if (argument == L"--direction") {
@@ -101,6 +140,34 @@ bool ParseCommandLine(
                 return false;
             }
             durationSeen = true;
+        } else if (argument == L"--fit") {
+            if (fitSeen) {
+                error = L"The --fit option may be specified only once.";
+                return false;
+            }
+            if (index + 1 >= argumentCount || IsOption(arguments[index + 1])) {
+                error = L"The --fit option requires a value.";
+                return false;
+            }
+            if (!ParseFitMode(arguments[++index], options.panning.fitMode)) {
+                error = L"Invalid fit mode. Use pan or cover.";
+                return false;
+            }
+            fitSeen = true;
+        } else if (argument == L"--position") {
+            if (positionSeen) {
+                error = L"The --position option may be specified only once.";
+                return false;
+            }
+            if (index + 1 >= argumentCount || IsOption(arguments[index + 1])) {
+                error = L"The --position option requires a value from 0 through 1.";
+                return false;
+            }
+            if (!ParsePosition(arguments[++index], options.panning.position)) {
+                error = L"Invalid position. Use a finite number from 0 through 1.";
+                return false;
+            }
+            positionSeen = true;
         } else if (IsOption(argument)) {
             error = L"Unknown option: " + std::wstring(argument);
             return false;
@@ -115,7 +182,8 @@ bool ParseCommandLine(
 
 std::wstring CommandLineUsage() {
     return L"Usage: PanningWallpaper.exe <image-path> "
-           L"[--direction <left|right|up|down>] [--duration <seconds>]";
+           L"[--direction <left|right|up|down>] [--duration <seconds>] "
+           L"[--fit <pan|cover>] [--position <0..1>]";
 }
 
 }  // namespace panning_wallpaper

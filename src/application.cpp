@@ -95,7 +95,7 @@ bool Application::Initialize(
 
     std::wstring rendererError;
     HRESULT result = renderer_.Initialize(
-        window_, image, configuration_.direction, rendererError);
+        window_, image, configuration_, rendererError);
     if (FAILED(result)) {
         if (rendererError.empty()) {
             error = std::format(

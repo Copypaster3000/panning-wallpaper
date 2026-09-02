@@ -1,5 +1,6 @@
 #include "panning.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace panning_wallpaper {
@@ -15,9 +16,15 @@ bool IsValidPanningConfiguration(
         configuration.direction == PanDirection::Right ||
         configuration.direction == PanDirection::Up ||
         configuration.direction == PanDirection::Down;
-    return knownDirection &&
+    const bool knownFitMode =
+        configuration.fitMode == FitMode::Pan ||
+        configuration.fitMode == FitMode::Cover;
+    return knownDirection && knownFitMode &&
            std::isfinite(configuration.loopDurationSeconds) &&
-           configuration.loopDurationSeconds > 0.0;
+           configuration.loopDurationSeconds > 0.0 &&
+           std::isfinite(configuration.position) &&
+           configuration.position >= 0.0 &&
+           configuration.position <= 1.0;
 }
 
 double CalculateLoopProgress(
@@ -28,7 +35,7 @@ double CalculateLoopProgress(
 }
 
 PanTransform CalculatePanTransform(
-    PanDirection direction,
+    const PanningConfiguration& configuration,
     double progress,
     std::uint32_t viewportWidth,
     std::uint32_t viewportHeight,
@@ -40,20 +47,39 @@ PanTransform CalculatePanTransform(
         return transform;
     }
 
-    if (IsHorizontal(direction)) {
-        const double displayedWidth =
-            static_cast<double>(imageWidth) * viewportHeight / imageHeight;
+    const bool horizontal = IsHorizontal(configuration.direction);
+    if (configuration.fitMode == FitMode::Pan) {
+        if (horizontal) {
+            const double displayedWidth =
+                static_cast<double>(imageWidth) * viewportHeight / imageHeight;
+            transform.scaleU = static_cast<float>(viewportWidth / displayedWidth);
+        } else {
+            const double displayedHeight =
+                static_cast<double>(imageHeight) * viewportWidth / imageWidth;
+            transform.scaleV = static_cast<float>(viewportHeight / displayedHeight);
+        }
+    } else {
+        const double scale = std::max(
+            static_cast<double>(viewportWidth) / imageWidth,
+            static_cast<double>(viewportHeight) / imageHeight);
+        const double displayedWidth = imageWidth * scale;
+        const double displayedHeight = imageHeight * scale;
         transform.scaleU = static_cast<float>(viewportWidth / displayedWidth);
+        transform.scaleV = static_cast<float>(viewportHeight / displayedHeight);
+    }
+
+    if (horizontal) {
         // A positive sample offset makes visible texture content move toward
         // decreasing screen coordinates; a negative offset reverses it.
         transform.offsetU = static_cast<float>(
-            direction == PanDirection::Left ? progress : -progress);
-    } else {
-        const double displayedHeight =
-            static_cast<double>(imageHeight) * viewportWidth / imageWidth;
-        transform.scaleV = static_cast<float>(viewportHeight / displayedHeight);
+            configuration.direction == PanDirection::Left ? progress : -progress);
         transform.offsetV = static_cast<float>(
-            direction == PanDirection::Up ? progress : -progress);
+            (1.0 - transform.scaleV) * configuration.position);
+    } else {
+        transform.offsetU = static_cast<float>(
+            (1.0 - transform.scaleU) * configuration.position);
+        transform.offsetV = static_cast<float>(
+            configuration.direction == PanDirection::Up ? progress : -progress);
     }
 
     return transform;
