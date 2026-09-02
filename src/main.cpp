@@ -1,4 +1,5 @@
 #include "application.h"
+#include "command_line.h"
 
 #include <windows.h>
 #include <objbase.h>
@@ -48,15 +49,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         return EXIT_FAILURE;
     }
 
-    if (argumentCount != 2) {
+    panning_wallpaper::CommandLineOptions options;
+    std::wstring commandLineError;
+    if (!panning_wallpaper::ParseCommandLine(
+            argumentCount, arguments, options, commandLineError)) {
         LocalFree(arguments);
         ShowFatalError(
-            L"Provide exactly one image path.\n\n"
-            L"Usage: PanningWallpaper.exe \"C:\\path\\to\\wallpaper.png\"");
+            commandLineError + L"\n\n" +
+            panning_wallpaper::CommandLineUsage());
         return EXIT_FAILURE;
     }
-
-    const std::wstring imagePath(arguments[1]);
     LocalFree(arguments);
 
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) &&
@@ -76,7 +78,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     panning_wallpaper::Application application;
     std::wstring error;
-    if (!application.Initialize(instance, imagePath, error)) {
+    if (!application.Initialize(
+            instance, options.imagePath, options.panning, error)) {
         ShowFatalError(error);
         return EXIT_FAILURE;
     }

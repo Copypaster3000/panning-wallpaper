@@ -1,5 +1,6 @@
 #pragma once
 
+#include "panning.h"
 #include "renderer.h"
 
 #include <windows.h>
@@ -21,6 +22,7 @@ public:
     [[nodiscard]] bool Initialize(
         HINSTANCE instance,
         std::wstring_view imagePath,
+        const PanningConfiguration& configuration,
         std::wstring& error);
     [[nodiscard]] int Run();
     [[nodiscard]] const std::wstring& RuntimeError() const noexcept;
@@ -41,13 +43,14 @@ private:
         LPARAM secondaryParameter);
     [[nodiscard]] HRESULT FitToDesktopHost();
     [[nodiscard]] HRESULT RenderCurrentFrame();
-    [[nodiscard]] float CurrentHorizontalOffset() const noexcept;
+    [[nodiscard]] double CurrentPanProgress() const noexcept;
     void CloseAfterFailure(std::wstring_view operation, HRESULT result);
 
     HINSTANCE instance_ = nullptr;
     HWND desktopHost_ = nullptr;
     HWND window_ = nullptr;
     Renderer renderer_;
+    PanningConfiguration configuration_;
     std::chrono::steady_clock::time_point animationStart_{};
     std::wstring runtimeError_;
 };

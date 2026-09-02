@@ -1,6 +1,7 @@
 #pragma once
 
 #include "image_decoder.h"
+#include "panning.h"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -15,9 +16,10 @@ public:
     [[nodiscard]] HRESULT Initialize(
         HWND window,
         const DecodedImage& image,
+        PanDirection direction,
         std::wstring& errorDetail);
     [[nodiscard]] HRESULT Resize(UINT width, UINT height);
-    [[nodiscard]] HRESULT RenderAndPresent(float horizontalOffset);
+    [[nodiscard]] HRESULT RenderAndPresent(double progress);
     void Shutdown() noexcept;
 
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -42,6 +44,7 @@ private:
     UINT renderHeight_ = 0;
     UINT imageWidth_ = 0;
     UINT imageHeight_ = 0;
+    PanDirection direction_ = PanDirection::Left;
 };
 
 }  // namespace panning_wallpaper

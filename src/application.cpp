@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <format>
 #include <string_view>
@@ -15,7 +14,6 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PanningWallpaper.RenderSurface";
 constexpr auto kFrameInterval = std::chrono::nanoseconds{1'000'000'000 / 30};
-constexpr double kLoopDurationSeconds = 90.0;
 
 [[nodiscard]] std::wstring FormatSystemError(std::wstring_view operation) {
     return std::format(
@@ -38,8 +36,15 @@ Application::~Application() {
 bool Application::Initialize(
     HINSTANCE instance,
     std::wstring_view imagePath,
+    const PanningConfiguration& configuration,
     std::wstring& error) {
+    if (!IsValidPanningConfiguration(configuration)) {
+        error = L"The panning configuration is invalid.";
+        return false;
+    }
+
     instance_ = instance;
+    configuration_ = configuration;
 
     DecodedImage image;
     if (!DecodeImageFile(imagePath, image, error)) {
@@ -89,7 +94,8 @@ bool Application::Initialize(
     }
 
     std::wstring rendererError;
-    HRESULT result = renderer_.Initialize(window_, image, rendererError);
+    HRESULT result = renderer_.Initialize(
+        window_, image, configuration_.direction, rendererError);
     if (FAILED(result)) {
         if (rendererError.empty()) {
             error = std::format(
@@ -340,14 +346,14 @@ HRESULT Application::FitToDesktopHost() {
 }
 
 HRESULT Application::RenderCurrentFrame() {
-    return renderer_.RenderAndPresent(CurrentHorizontalOffset());
+    return renderer_.RenderAndPresent(CurrentPanProgress());
 }
 
-float Application::CurrentHorizontalOffset() const noexcept {
+double Application::CurrentPanProgress() const noexcept {
     const double elapsedSeconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - animationStart_).count();
-    const double completedLoops = elapsedSeconds / kLoopDurationSeconds;
-    return static_cast<float>(completedLoops - std::floor(completedLoops));
+    return CalculateLoopProgress(
+        elapsedSeconds, configuration_.loopDurationSeconds);
 }
 
 void Application::CloseAfterFailure(std::wstring_view operation, HRESULT result) {

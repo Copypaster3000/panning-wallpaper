@@ -31,9 +31,8 @@ VertexOutput main(uint vertexId : SV_VertexID)
 constexpr std::string_view kPixelShaderSource = R"(
 cbuffer FrameConstants : register(b0)
 {
-    float horizontalOffset;
-    float horizontalScale;
-    float2 padding;
+    float2 sampleScale;
+    float2 sampleOffset;
 };
 
 Texture2D wallpaperTexture : register(t0);
@@ -42,17 +41,14 @@ SamplerState wallpaperSampler : register(s0);
 float4 main(float4 position : SV_POSITION, float2 textureCoordinate : TEXCOORD0)
     : SV_TARGET
 {
-    float2 sampleCoordinate = float2(
-        textureCoordinate.x * horizontalScale + horizontalOffset,
-        textureCoordinate.y);
+    float2 sampleCoordinate = textureCoordinate * sampleScale + sampleOffset;
     return wallpaperTexture.Sample(wallpaperSampler, sampleCoordinate);
 }
 )";
 
 struct alignas(16) FrameConstants {
-    float horizontalOffset;
-    float horizontalScale;
-    float padding[2];
+    float sampleScale[2];
+    float sampleOffset[2];
 };
 
 static_assert(sizeof(FrameConstants) == 16);
@@ -92,7 +88,10 @@ namespace panning_wallpaper {
 HRESULT Renderer::Initialize(
     HWND window,
     const DecodedImage& image,
+    PanDirection direction,
     std::wstring& errorDetail) {
+    direction_ = direction;
+
     RECT clientRectangle{};
     if (!GetClientRect(window, &clientRectangle)) {
         return HRESULT_FROM_WIN32(GetLastError());
@@ -207,19 +206,23 @@ HRESULT Renderer::Resize(UINT width, UINT height) {
     return S_OK;
 }
 
-HRESULT Renderer::RenderAndPresent(float horizontalOffset) {
+HRESULT Renderer::RenderAndPresent(double progress) {
     if (!renderTarget_ || !imageView_ || !frameConstants_ ||
         renderWidth_ == 0 || renderHeight_ == 0 ||
         imageWidth_ == 0 || imageHeight_ == 0) {
         return E_UNEXPECTED;
     }
 
-    const double scaledImageWidth =
-        static_cast<double>(imageWidth_) * renderHeight_ / imageHeight_;
+    const PanTransform transform = CalculatePanTransform(
+        direction_,
+        progress,
+        renderWidth_,
+        renderHeight_,
+        imageWidth_,
+        imageHeight_);
     const FrameConstants constants{
-        horizontalOffset,
-        static_cast<float>(renderWidth_ / scaledImageWidth),
-        {0.0F, 0.0F},
+        {transform.scaleU, transform.scaleV},
+        {transform.offsetU, transform.offsetV},
     };
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -347,8 +350,12 @@ HRESULT Renderer::CreatePipeline(std::wstring& errorDetail) {
 
     D3D11_SAMPLER_DESC samplerDescription{};
     samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-    samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDescription.AddressU = IsHorizontal(direction_)
+        ? D3D11_TEXTURE_ADDRESS_WRAP
+        : D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDescription.AddressV = IsHorizontal(direction_)
+        ? D3D11_TEXTURE_ADDRESS_CLAMP
+        : D3D11_TEXTURE_ADDRESS_WRAP;
     samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
     result = device_->CreateSamplerState(&samplerDescription, &sampler_);
