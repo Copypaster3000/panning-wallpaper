@@ -1,4 +1,5 @@
 #include "command_line.h"
+#include "coverage_geometry.h"
 #include "panning.h"
 
 #include <algorithm>
@@ -53,13 +54,15 @@ void TestCommandLine() {
           "default fit mode is pan");
     CheckNear(options.panning.position, 0.5,
               "default position is centered");
+    Check(options.panning.pauseWhenCovered,
+          "coverage pausing defaults on");
 
     const CommandLineOptions defaults = options;
 
     Check(Parse(
               std::array{L"app", L"image.png", L"--direction", L"left",
                          L"--duration", L"90", L"--fit", L"pan",
-                         L"--position", L"0.5"},
+                         L"--position", L"0.5", L"--pause-when-covered", L"on"},
               options,
               error),
           "all explicit defaults parse");
@@ -67,7 +70,9 @@ void TestCommandLine() {
               options.panning.loopDurationSeconds ==
                   defaults.panning.loopDurationSeconds &&
               options.panning.fitMode == defaults.panning.fitMode &&
-              options.panning.position == defaults.panning.position,
+              options.panning.position == defaults.panning.position &&
+              options.panning.pauseWhenCovered ==
+                  defaults.panning.pauseWhenCovered,
           "implicit and explicit defaults are equivalent");
 
     Check(Parse(
@@ -85,6 +90,14 @@ void TestCommandLine() {
           "cover fit mode is retained");
     CheckNear(options.panning.position, 0.25,
               "quarter position is retained");
+
+    Check(Parse(
+              std::array{L"app", L"image.png", L"--pause-when-covered", L"off"},
+              options,
+              error),
+          "coverage pausing accepts off");
+    Check(!options.panning.pauseWhenCovered,
+          "coverage pausing retains off");
 
     Check(Parse(
               std::array{L"app", L"image.png", L"--duration", L"120",
@@ -160,8 +173,70 @@ void TestCommandLine() {
     Rejects(std::array{L"app", L"image.png", L"--position", L"0.25",
                        L"--position", L"0.75"},
             "duplicate position is rejected");
+    Rejects(std::array{L"app", L"image.png", L"--pause-when-covered"},
+            "missing pause-when-covered value is rejected");
+    Rejects(std::array{L"app", L"image.png", L"--pause-when-covered", L"true"},
+            "unknown pause-when-covered value is rejected");
+    Rejects(std::array{L"app", L"image.png", L"--pause-when-covered", L"on",
+                       L"--pause-when-covered", L"off"},
+            "duplicate pause-when-covered option is rejected");
     Rejects(std::array{L"app", L"image.png", L"extra"},
             "unexpected positional argument is rejected");
+}
+
+void TestCoverageGeometry() {
+    using panning_wallpaper::CoverageRectangle;
+    using panning_wallpaper::IsFullyCovered;
+
+    constexpr CoverageRectangle wallpaper{0, 0, 100, 80};
+    Check(IsFullyCovered(wallpaper, std::array{CoverageRectangle{0, 0, 100, 80}}),
+          "one exact rectangle covers wallpaper");
+    Check(!IsFullyCovered(wallpaper, std::array{CoverageRectangle{0, 0, 99, 80}}),
+          "one exposed edge is not covered");
+    Check(IsFullyCovered(wallpaper, std::array{CoverageRectangle{-10, -20, 120, 90}}),
+          "one oversized rectangle covers wallpaper");
+    Check(IsFullyCovered(
+              wallpaper,
+              std::array{CoverageRectangle{0, 0, 50, 80},
+                         CoverageRectangle{50, 0, 100, 80}}),
+          "two half-width rectangles cover wallpaper");
+    Check(!IsFullyCovered(
+              wallpaper,
+              std::array{CoverageRectangle{0, 0, 49, 80},
+                         CoverageRectangle{51, 0, 100, 80}}),
+          "two rectangles with a gap do not cover wallpaper");
+    Check(!IsFullyCovered(
+              wallpaper,
+              std::array{CoverageRectangle{0, 0, 75, 60},
+                         CoverageRectangle{25, 20, 100, 80}}),
+          "heavy overlap does not hide uncovered corners");
+    Check(IsFullyCovered(
+              wallpaper,
+              std::array{CoverageRectangle{0, 0, 35, 80},
+                         CoverageRectangle{35, 0, 70, 80},
+                         CoverageRectangle{70, 0, 100, 80}}),
+          "three rectangles together cover wallpaper");
+    Check(IsFullyCovered(
+              wallpaper,
+              std::array{CoverageRectangle{-40, -30, 60, 100},
+                         CoverageRectangle{60, -30, 140, 100}}),
+          "outside rectangles clip to wallpaper");
+
+    constexpr CoverageRectangle negativeWallpaper{-200, -100, 0, 100};
+    Check(IsFullyCovered(
+              negativeWallpaper,
+              std::array{CoverageRectangle{-250, -150, -100, 150},
+                         CoverageRectangle{-100, -150, 20, 150}}),
+          "negative virtual-desktop coordinates are covered correctly");
+
+    constexpr CoverageRectangle twoMonitorWallpaper{-1920, 0, 1920, 1080};
+    Check(IsFullyCovered(
+              twoMonitorWallpaper,
+              std::array{CoverageRectangle{-1920, 0, 0, 1080},
+                         CoverageRectangle{0, 0, 1920, 1080}}),
+          "multiple-monitor-shaped virtual coordinates require both halves");
+    Check(!IsFullyCovered(wallpaper, std::array<CoverageRectangle, 0>{}),
+          "empty occluder set does not cover wallpaper");
 }
 
 void TestTiming() {
@@ -348,6 +423,7 @@ int main() {
     TestCommandLine();
     TestTiming();
     TestTransforms();
+    TestCoverageGeometry();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed.\n";

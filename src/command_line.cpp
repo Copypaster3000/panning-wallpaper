@@ -38,6 +38,19 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool ParseOnOff(
+    std::wstring_view value,
+    bool& enabled) noexcept {
+    if (value == L"on") {
+        enabled = true;
+    } else if (value == L"off") {
+        enabled = false;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ParseFiniteNumber(
     const wchar_t* value,
     double& number) noexcept {
@@ -110,6 +123,7 @@ bool ParseCommandLine(
     bool durationSeen = false;
     bool fitSeen = false;
     bool positionSeen = false;
+    bool pauseWhenCoveredSeen = false;
     for (int index = 2; index < argumentCount; ++index) {
         const std::wstring_view argument(arguments[index]);
         if (argument == L"--direction") {
@@ -168,6 +182,21 @@ bool ParseCommandLine(
                 return false;
             }
             positionSeen = true;
+        } else if (argument == L"--pause-when-covered") {
+            if (pauseWhenCoveredSeen) {
+                error = L"The --pause-when-covered option may be specified only once.";
+                return false;
+            }
+            if (index + 1 >= argumentCount || IsOption(arguments[index + 1])) {
+                error = L"The --pause-when-covered option requires on or off.";
+                return false;
+            }
+            if (!ParseOnOff(
+                    arguments[++index], options.panning.pauseWhenCovered)) {
+                error = L"Invalid pause-when-covered value. Use on or off.";
+                return false;
+            }
+            pauseWhenCoveredSeen = true;
         } else if (IsOption(argument)) {
             error = L"Unknown option: " + std::wstring(argument);
             return false;
@@ -183,7 +212,8 @@ bool ParseCommandLine(
 std::wstring CommandLineUsage() {
     return L"Usage: PanningWallpaper.exe <image-path> "
            L"[--direction <left|right|up|down>] [--duration <seconds>] "
-           L"[--fit <pan|cover>] [--position <0..1>]";
+           L"[--fit <pan|cover>] [--position <0..1>] "
+           L"[--pause-when-covered <on|off>]";
 }
 
 }  // namespace panning_wallpaper

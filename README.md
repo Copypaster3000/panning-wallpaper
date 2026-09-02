@@ -2,9 +2,8 @@
 
 Panning Wallpaper is a lightweight native Windows application for smoothly
 panning still-image wallpapers. The project is under development; the current
-milestone provides only the Windows desktop-hosting and Direct3D 11 rendering
-foundation plus configurable horizontal or vertical still-image panning behind
-the desktop icons.
+milestone provides Windows desktop hosting, Direct3D 11 still-image panning,
+and visibility-aware rendering behind the desktop icons.
 
 ## Requirements
 
@@ -27,6 +26,7 @@ The command syntax is:
 ```text
 PanningWallpaper.exe <image-path> [--direction <left|right|up|down>]
     [--duration <seconds>] [--fit <pan|cover>] [--position <0..1>]
+    [--pause-when-covered <on|off>]
 ```
 
 Direction defaults to `left`, and duration defaults to 90 seconds for one
@@ -43,6 +43,27 @@ Imaging Component.
 There is no graphical settings UI yet. The rendering cadence remains fixed at
 approximately 30 FPS. Press `Ctrl+Alt+Shift+Q` to exit cleanly and restore the
 normal desktop wallpaper.
+
+## Visibility-aware rendering
+
+Rendering automatically stops when the combined coverage of supported opaque
+top-level windows fully covers the entire wallpaper surface. Multiple windows
+are considered together, including across a multi-monitor surface, and
+rendering resumes automatically when any part becomes exposed. This behavior
+defaults to on and can be disabled for setups that use unusual overlays:
+
+```text
+--pause-when-covered off
+```
+
+Session lock and console-display-off states always pause rendering, regardless
+of that option. GPU resources remain resident while paused, and animation
+resumes at its current absolute-time phase rather than replaying hidden frames.
+
+Coverage detection excludes known transparent or ambiguous layered windows
+where practical. Windows does not provide a perfect general-purpose query for
+whether every pixel of an arbitrary window is opaque, so detection is
+intentionally conservative and may continue rendering in uncertain cases.
 
 ## Performance snapshot
 

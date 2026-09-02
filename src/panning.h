@@ -21,6 +21,7 @@ struct PanningConfiguration {
     double loopDurationSeconds = 90.0;
     FitMode fitMode = FitMode::Pan;
     double position = 0.5;
+    bool pauseWhenCovered = true;
 };
 
 struct PanTransform {

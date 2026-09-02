@@ -3,8 +3,12 @@
 #include "desktop_host.h"
 #include "image_decoder.h"
 
+#include <powrprof.h>
+#include <wtsapi32.h>
+
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <format>
 #include <string_view>
 
@@ -19,9 +23,16 @@ constexpr auto kFrameInterval = std::chrono::nanoseconds{1'000'000'000 / 30};
         L"{} failed with Win32 error {}.", operation, GetLastError());
 }
 
+void OutputVisibilityDiagnostic(std::wstring_view diagnostic) {
+    const std::wstring message =
+        L"Panning Wallpaper: " + std::wstring(diagnostic) + L"\n";
+    OutputDebugStringW(message.c_str());
+}
+
 }  // namespace
 
 Application::~Application() {
+    ShutdownVisibilityNotifications();
     if (window_ != nullptr && IsWindow(window_)) {
         DestroyWindow(window_);
     }
@@ -120,14 +131,18 @@ bool Application::Initialize(
         return false;
     }
 
+    InitializeVisibilityNotifications();
     ShowWindow(window_, SW_SHOWNOACTIVATE);
     animationStart_ = std::chrono::steady_clock::now();
-    result = RenderCurrentFrame();
-    if (FAILED(result)) {
-        error = std::format(
-            L"The initial Direct3D frame could not be presented (HRESULT 0x{:08X}).",
-            static_cast<unsigned long>(result));
-        return false;
+    ReevaluateWindowCoverage();
+    if (!IsRenderingPaused()) {
+        result = RenderCurrentFrame();
+        if (FAILED(result)) {
+            error = std::format(
+                L"The initial Direct3D frame could not be presented (HRESULT 0x{:08X}).",
+                static_cast<unsigned long>(result));
+            return false;
+        }
     }
 
     return true;
@@ -156,6 +171,7 @@ int Application::Run() {
     auto nextFrame = std::chrono::steady_clock::now() + kFrameInterval;
     int exitCode = 0;
     bool running = true;
+    bool timerArmed = false;
 
     while (running) {
         MSG message{};
@@ -173,8 +189,24 @@ int Application::Run() {
             break;
         }
 
+        if (frameScheduleResetRequested_ && !IsRenderingPaused()) {
+            nextFrame = std::chrono::steady_clock::now();
+            frameScheduleResetRequested_ = false;
+        }
+
+        if (IsRenderingPaused()) {
+            if (timerArmed) {
+                if (!CancelWaitableTimer(frameTimer)) {
+                    runtimeError_ = FormatSystemError(L"CancelWaitableTimer");
+                    exitCode = 1;
+                    break;
+                }
+                timerArmed = false;
+            }
+        }
+
         const auto now = std::chrono::steady_clock::now();
-        if (runtimeError_.empty() && now >= nextFrame) {
+        if (runtimeError_.empty() && !IsRenderingPaused() && now >= nextFrame) {
             const HRESULT result = RenderCurrentFrame();
             if (FAILED(result)) {
                 CloseAfterFailure(L"Animation frame presentation", result);
@@ -189,7 +221,7 @@ int Application::Run() {
 
         DWORD handleCount = 0;
         const HANDLE handles[] = {frameTimer};
-        if (runtimeError_.empty()) {
+        if (runtimeError_.empty() && !IsRenderingPaused()) {
             using HundredNanoseconds =
                 std::chrono::duration<LONGLONG, std::ratio<1, 10'000'000>>;
             const auto remaining = nextFrame - now;
@@ -203,6 +235,7 @@ int Application::Run() {
                 break;
             }
             handleCount = 1;
+            timerArmed = true;
         }
 
         const DWORD waitResult = MsgWaitForMultipleObjectsEx(
@@ -215,6 +248,9 @@ int Application::Run() {
             runtimeError_ = FormatSystemError(L"MsgWaitForMultipleObjectsEx");
             exitCode = 1;
             break;
+        }
+        if (handleCount != 0 && waitResult == WAIT_OBJECT_0) {
+            timerArmed = false;
         }
     }
 
@@ -261,6 +297,7 @@ LRESULT Application::HandleMessage(
         return 0;
 
     case WM_DESTROY:
+        ShutdownVisibilityNotifications();
         UnregisterHotKey(window, kExitHotKeyId);
         renderer_.Shutdown();
         window_ = nullptr;
@@ -277,13 +314,48 @@ LRESULT Application::HandleMessage(
         }
         break;
 
+    case kCoverageChangedMessage:
+        coverageMonitor_.AcknowledgeNotification();
+        ReevaluateWindowCoverage();
+        return 0;
+
+    case WM_WTSSESSION_CHANGE:
+        if (parameter == WTS_SESSION_LOCK) {
+            SetPauseReason(PauseReason::SessionLocked, true);
+        } else if (parameter == WTS_SESSION_UNLOCK) {
+            ReevaluateWindowCoverage();
+            SetPauseReason(PauseReason::SessionLocked, false);
+        }
+        return 0;
+
+    case WM_POWERBROADCAST:
+        if (parameter == PBT_POWERSETTINGCHANGE && secondaryParameter != 0) {
+            const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(
+                secondaryParameter);
+            if (IsEqualGUID(setting->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) &&
+                setting->DataLength >= sizeof(DWORD)) {
+                DWORD displayState = 0;
+                std::memcpy(&displayState, setting->Data, sizeof(displayState));
+                if (displayState == 0) {
+                    SetPauseReason(PauseReason::DisplayOff, true);
+                } else {
+                    // Both on (1) and dimmed-but-visible (2) permit rendering.
+                    ReevaluateWindowCoverage();
+                    SetPauseReason(PauseReason::DisplayOff, false);
+                }
+            }
+        }
+        return TRUE;
+
     case WM_DISPLAYCHANGE:
         if (renderer_.IsInitialized()) {
             HRESULT result = FitToDesktopHost();
+            ReevaluateWindowCoverage();
             // A changed size synchronously produces WM_SIZE, which recreates and
             // presents the swap chain. If the size is unchanged, display-change
             // notification itself is the one legitimate redraw condition.
-            if (result == S_FALSE) {
+            if (result == S_FALSE && !IsRenderingPaused() &&
+                !frameScheduleResetRequested_) {
                 result = RenderCurrentFrame();
             }
             if (FAILED(result)) {
@@ -297,7 +369,7 @@ LRESULT Application::HandleMessage(
         BeginPaint(window, &paint);
         EndPaint(window, &paint);
 
-        if (renderer_.IsInitialized()) {
+        if (renderer_.IsInitialized() && !IsRenderingPaused()) {
             const HRESULT result = RenderCurrentFrame();
             if (FAILED(result)) {
                 CloseAfterFailure(L"Paint presentation", result);
@@ -319,7 +391,9 @@ LRESULT Application::HandleMessage(
             const UINT height =
                 static_cast<UINT>(clientRectangle.bottom - clientRectangle.top);
             HRESULT result = renderer_.Resize(width, height);
-            if (SUCCEEDED(result) && width != 0 && height != 0) {
+            ReevaluateWindowCoverage();
+            if (SUCCEEDED(result) && width != 0 && height != 0 &&
+                !IsRenderingPaused() && !frameScheduleResetRequested_) {
                 result = RenderCurrentFrame();
             }
             if (FAILED(result)) {
@@ -384,6 +458,74 @@ double Application::CurrentPanProgress() const noexcept {
         std::chrono::steady_clock::now() - animationStart_).count();
     return CalculateLoopProgress(
         elapsedSeconds, configuration_.loopDurationSeconds);
+}
+
+bool Application::IsRenderingPaused() const noexcept {
+    return pauseReasons_ != 0;
+}
+
+void Application::SetPauseReason(PauseReason reason, bool active) noexcept {
+    const bool wasPaused = IsRenderingPaused();
+    const unsigned int mask = static_cast<unsigned int>(reason);
+    if (active) {
+        pauseReasons_ |= mask;
+    } else {
+        pauseReasons_ &= ~mask;
+    }
+
+    if (wasPaused && !IsRenderingPaused()) {
+        frameScheduleResetRequested_ = true;
+    }
+}
+
+void Application::ReevaluateWindowCoverage() {
+    const bool covered = configuration_.pauseWhenCovered &&
+        coverageMonitoringActive_ &&
+        coverageMonitor_.IsWallpaperFullyCovered();
+    SetPauseReason(PauseReason::CoveredByWindows, covered);
+}
+
+void Application::InitializeVisibilityNotifications() {
+    if (WTSRegisterSessionNotification(window_, NOTIFY_FOR_THIS_SESSION)) {
+        sessionNotificationsRegistered_ = true;
+    } else {
+        OutputVisibilityDiagnostic(std::format(
+            L"WTSRegisterSessionNotification failed with Win32 error {}; "
+            L"session-lock pausing is unavailable.",
+            GetLastError()));
+    }
+
+    displayPowerNotification_ = RegisterPowerSettingNotification(
+        window_, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
+    if (displayPowerNotification_ == nullptr) {
+        OutputVisibilityDiagnostic(std::format(
+            L"RegisterPowerSettingNotification failed with Win32 error {}; "
+            L"display-off pausing is unavailable.",
+            GetLastError()));
+    }
+
+    if (configuration_.pauseWhenCovered) {
+        std::wstring diagnostic;
+        coverageMonitoringActive_ = coverageMonitor_.Initialize(
+            window_, desktopHost_, kCoverageChangedMessage, diagnostic);
+        if (!coverageMonitoringActive_) {
+            OutputVisibilityDiagnostic(diagnostic);
+        }
+    }
+}
+
+void Application::ShutdownVisibilityNotifications() noexcept {
+    coverageMonitoringActive_ = false;
+    coverageMonitor_.Shutdown();
+
+    if (sessionNotificationsRegistered_ && window_ != nullptr) {
+        WTSUnRegisterSessionNotification(window_);
+        sessionNotificationsRegistered_ = false;
+    }
+    if (displayPowerNotification_ != nullptr) {
+        UnregisterPowerSettingNotification(displayPowerNotification_);
+        displayPowerNotification_ = nullptr;
+    }
 }
 
 void Application::CloseAfterFailure(std::wstring_view operation, HRESULT result) {
