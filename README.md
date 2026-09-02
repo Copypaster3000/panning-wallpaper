@@ -44,6 +44,32 @@ There is no graphical settings UI yet. The rendering cadence remains fixed at
 approximately 30 FPS. Press `Ctrl+Alt+Shift+Q` to exit cleanly and restore the
 normal desktop wallpaper.
 
+## Performance snapshot
+
+M3A development measurements used a 4096x1367 PNG in left/pan mode for 30
+seconds after one warm-up frame. The test system ran Windows 11 build 26200 on
+an Intel Core i7-10750H (6 cores/12 threads), 32 GB RAM, and the default Intel
+UHD Graphics adapter (driver 31.0.101.2137).
+
+| Render surface | Frames/FPS | P90 interval, before -> after | Maximum interval, before -> after | Process GPU, before -> after |
+| --- | ---: | ---: | ---: | ---: |
+| 1920x1080 | 900 / 30.0 | 46.0 -> 33.6 ms | 48.4 -> 33.9 ms | 4.65% -> 4.39% |
+| 2560x1440 | 900 / 30.0 | 46.0 -> 33.6 ms | 48.0 -> 34.0 ms | 5.65% -> 5.58% |
+| 3072x1263 | 900 / 30.0 | 46.0 -> 33.6 ms | 48.0 -> 34.1 ms | 6.56% -> 6.31% |
+
+An 18-second process-thread counter check measured approximately 70 context
+switches per second before and 32 after, close to the intended 30 wakeups per
+second.
+
+Post-change process CPU time was 0.16-0.55 seconds per 30-second run (under
+0.2% of total capacity on this 12-logical-processor system). Working set was
+approximately 48 MiB and private memory approximately 30 MiB, with no
+continuing memory growth in a 125-second run. GPU values are process-specific
+Windows GPU Engine counter samples, not whole-system utilization. The harness
+uses the production renderer and scheduling algorithm in a standalone render
+window; these results are a single-machine snapshot, not a performance
+guarantee for other hardware or actual Explorer desktop composition.
+
 The Explorer desktop-hosting technique used by this early milestone relies on
 undocumented shell behavior. It is intended for current Windows 10 and Windows
 11 Explorer versions, but is not a compatibility guarantee across future shell

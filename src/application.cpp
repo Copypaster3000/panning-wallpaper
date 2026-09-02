@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 #include <format>
 #include <string_view>
 
@@ -135,6 +134,25 @@ bool Application::Initialize(
 }
 
 int Application::Run() {
+    // A process-local high-resolution timer avoids quantizing 30 FPS deadlines
+    // to the coarse system timer tick without changing global timer resolution.
+    HANDLE frameTimer = CreateWaitableTimerExW(
+        nullptr,
+        nullptr,
+        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+        TIMER_MODIFY_STATE | SYNCHRONIZE);
+    if (frameTimer == nullptr && GetLastError() == ERROR_INVALID_PARAMETER) {
+        frameTimer = CreateWaitableTimerExW(
+            nullptr,
+            nullptr,
+            0,
+            TIMER_MODIFY_STATE | SYNCHRONIZE);
+    }
+    if (frameTimer == nullptr) {
+        runtimeError_ = FormatSystemError(L"CreateWaitableTimerExW");
+        return 1;
+    }
+
     auto nextFrame = std::chrono::steady_clock::now() + kFrameInterval;
     int exitCode = 0;
     bool running = true;
@@ -169,26 +187,38 @@ int Application::Run() {
             continue;
         }
 
-        DWORD timeoutMilliseconds = INFINITE;
+        DWORD handleCount = 0;
+        const HANDLE handles[] = {frameTimer};
         if (runtimeError_.empty()) {
+            using HundredNanoseconds =
+                std::chrono::duration<LONGLONG, std::ratio<1, 10'000'000>>;
             const auto remaining = nextFrame - now;
-            const auto rounded = std::chrono::ceil<std::chrono::milliseconds>(remaining);
-            timeoutMilliseconds = static_cast<DWORD>(
-                std::max<std::int64_t>(1, rounded.count()));
+            const auto rounded = std::chrono::ceil<HundredNanoseconds>(remaining);
+            LARGE_INTEGER dueTime{};
+            dueTime.QuadPart = -std::max<LONGLONG>(1, rounded.count());
+            if (!SetWaitableTimer(
+                    frameTimer, &dueTime, 0, nullptr, nullptr, FALSE)) {
+                runtimeError_ = FormatSystemError(L"SetWaitableTimer");
+                exitCode = 1;
+                break;
+            }
+            handleCount = 1;
         }
 
         const DWORD waitResult = MsgWaitForMultipleObjectsEx(
-            0,
-            nullptr,
-            timeoutMilliseconds,
+            handleCount,
+            handleCount != 0 ? handles : nullptr,
+            INFINITE,
             QS_ALLINPUT,
             MWMO_INPUTAVAILABLE);
         if (waitResult == WAIT_FAILED) {
             runtimeError_ = FormatSystemError(L"MsgWaitForMultipleObjectsEx");
-            return 1;
+            exitCode = 1;
+            break;
         }
     }
 
+    CloseHandle(frameTimer);
     return exitCode;
 }
 
