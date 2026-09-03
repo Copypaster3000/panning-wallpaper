@@ -9,12 +9,23 @@
 #include <format>
 #include <string>
 
+#if defined(_MSC_VER)
+// Opt in to the themed Windows common controls used by the settings window.
+#pragma comment(                                                               \
+    linker,                                                                    \
+    "\"/manifestdependency:type='win32' "                                      \
+    "name='Microsoft.Windows.Common-Controls' version='6.0.0.0' "             \
+    "processorArchitecture='*' publicKeyToken='6595b64144ccf1df' "            \
+    "language='*'\"")
+#endif
+
 namespace {
 
 class ComApartment final {
 public:
     [[nodiscard]] HRESULT Initialize() noexcept {
-        const HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const HRESULT result = CoInitializeEx(
+            nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         initialized_ = SUCCEEDED(result);
         return result;
     }
@@ -78,8 +89,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     panning_wallpaper::Application application;
     std::wstring error;
-    if (!application.Initialize(
-            instance, options.imagePath, options.panning, error)) {
+    const bool initialized =
+        options.launchMode == panning_wallpaper::LaunchMode::Settings
+        ? application.InitializeSettings(instance, error)
+        : application.InitializeDirectWallpaper(
+              instance, options.imagePath, options.panning, error);
+    if (!initialized) {
         ShowFatalError(error);
         return EXIT_FAILURE;
     }

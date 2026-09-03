@@ -19,6 +19,8 @@ public:
         const PanningConfiguration& configuration,
         std::wstring& errorDetail);
     [[nodiscard]] HRESULT Resize(UINT width, UINT height);
+    [[nodiscard]] HRESULT UpdateConfiguration(
+        const PanningConfiguration& configuration);
     [[nodiscard]] HRESULT RenderAndPresent(double progress);
     void Shutdown() noexcept;
 
@@ -28,6 +30,9 @@ private:
     [[nodiscard]] HRESULT CreateRenderTarget();
     [[nodiscard]] HRESULT CreateImageTexture(const DecodedImage& image);
     [[nodiscard]] HRESULT CreatePipeline(std::wstring& errorDetail);
+    [[nodiscard]] HRESULT CreateSampler(
+        const PanningConfiguration& configuration,
+        Microsoft::WRL::ComPtr<ID3D11SamplerState>& sampler) const;
     void UpdateViewport(UINT width, UINT height) noexcept;
 
     Microsoft::WRL::ComPtr<ID3D11Device> device_;

@@ -3,7 +3,8 @@
 Panning Wallpaper is a lightweight native Windows application for smoothly
 panning still-image wallpapers. The project is under development; the current
 milestone provides Windows desktop hosting, Direct3D 11 still-image panning,
-and visibility-aware rendering behind the desktop icons.
+visibility-aware rendering behind the desktop icons, and a lightweight native
+settings interface.
 
 ## Requirements
 
@@ -18,10 +19,15 @@ From a Developer PowerShell for Visual Studio:
 ```powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
-& .\build\Release\PanningWallpaper.exe "C:\path\to\wallpaper.png"
+& .\build\Release\PanningWallpaper.exe
 ```
 
-The command syntax is:
+Choose a PNG or JPEG image, adjust the direction, loop duration, fit, framing
+position, and covered-window pause setting, then select **Apply Wallpaper**.
+The same window can update a running wallpaper or stop it.
+
+Advanced command-line use remains available and starts the wallpaper directly
+without opening settings:
 
 ```text
 PanningWallpaper.exe <image-path> [--direction <left|right|up|down>]
@@ -40,9 +46,10 @@ horizontal panning it selects top-to-bottom framing; during vertical panning it
 selects left-to-right framing. PNG and JPEG images are decoded with Windows
 Imaging Component.
 
-There is no graphical settings UI yet. The rendering cadence remains fixed at
-approximately 30 FPS. Press `Ctrl+Alt+Shift+Q` to exit cleanly and restore the
-normal desktop wallpaper.
+The rendering cadence remains fixed at approximately 30 FPS. Press
+`Ctrl+Alt+Shift+Q` to exit cleanly and restore the normal desktop wallpaper.
+In this milestone, closing the settings application also stops the wallpaper;
+settings are not persisted between launches yet.
 
 ## Visibility-aware rendering
 

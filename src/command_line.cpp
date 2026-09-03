@@ -108,11 +108,17 @@ bool ParseCommandLine(
     options = {};
     error.clear();
 
-    if (argumentCount < 2 || arguments == nullptr) {
-        error = L"An image path is required.";
+    if (argumentCount < 1 || arguments == nullptr) {
+        error = L"The command line is unavailable.";
         return false;
     }
 
+    if (argumentCount == 1) {
+        options.launchMode = LaunchMode::Settings;
+        return true;
+    }
+
+    options.launchMode = LaunchMode::DirectWallpaper;
     options.imagePath = arguments[1];
     if (options.imagePath.empty() || IsOption(options.imagePath)) {
         error = L"The first argument must be an image path.";
@@ -210,7 +216,8 @@ bool ParseCommandLine(
 }
 
 std::wstring CommandLineUsage() {
-    return L"Usage: PanningWallpaper.exe <image-path> "
+    return L"Usage: PanningWallpaper.exe\n"
+           L"   or: PanningWallpaper.exe <image-path> "
            L"[--direction <left|right|up|down>] [--duration <seconds>] "
            L"[--fit <pan|cover>] [--position <0..1>] "
            L"[--pause-when-covered <on|off>]";

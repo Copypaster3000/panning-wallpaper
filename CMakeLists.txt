@@ -16,8 +16,16 @@ add_executable(PanningWallpaper WIN32
     src/main.cpp
     src/panning.cpp
     src/panning.h
+    src/preview_image.cpp
+    src/preview_image.h
+    src/preview_window.cpp
+    src/preview_window.h
     src/renderer.cpp
     src/renderer.h
+    src/settings_model.cpp
+    src/settings_model.h
+    src/settings_window.cpp
+    src/settings_window.h
     src/window_coverage.cpp
     src/window_coverage.h
 )
@@ -41,8 +49,11 @@ if(MSVC)
 endif()
 
 target_link_libraries(PanningWallpaper PRIVATE
+    comctl32
     d3d11
     d3dcompiler
+    d2d1
+    dwrite
     dwmapi
     dxgi
     ole32
@@ -62,6 +73,10 @@ if(BUILD_TESTING)
         src/coverage_geometry.h
         src/panning.cpp
         src/panning.h
+        src/preview_image.cpp
+        src/preview_image.h
+        src/settings_model.cpp
+        src/settings_model.h
         tests/panning_tests.cpp
     )
     target_compile_features(PanningTests PRIVATE cxx_std_20)

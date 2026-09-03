@@ -6,7 +6,13 @@
 
 namespace panning_wallpaper {
 
+enum class LaunchMode {
+    Settings,
+    DirectWallpaper,
+};
+
 struct CommandLineOptions {
+    LaunchMode launchMode = LaunchMode::Settings;
     std::wstring imagePath;
     PanningConfiguration panning;
 };

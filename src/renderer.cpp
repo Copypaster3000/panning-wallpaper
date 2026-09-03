@@ -206,6 +206,28 @@ HRESULT Renderer::Resize(UINT width, UINT height) {
     return S_OK;
 }
 
+HRESULT Renderer::UpdateConfiguration(
+    const PanningConfiguration& configuration) {
+    if (!IsInitialized() || !IsValidPanningConfiguration(configuration)) {
+        return E_INVALIDARG;
+    }
+
+    if (IsHorizontal(configuration_.direction) !=
+        IsHorizontal(configuration.direction)) {
+        Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
+        const HRESULT result = CreateSampler(configuration, sampler);
+        if (FAILED(result)) {
+            return result;
+        }
+        ID3D11SamplerState* const samplers[] = {sampler.Get()};
+        deviceContext_->PSSetSamplers(0, 1, samplers);
+        sampler_ = std::move(sampler);
+    }
+
+    configuration_ = configuration;
+    return S_OK;
+}
+
 HRESULT Renderer::RenderAndPresent(double progress) {
     if (!renderTarget_ || !imageView_ || !frameConstants_ ||
         renderWidth_ == 0 || renderHeight_ == 0 ||
@@ -348,17 +370,7 @@ HRESULT Renderer::CreatePipeline(std::wstring& errorDetail) {
         return result;
     }
 
-    D3D11_SAMPLER_DESC samplerDescription{};
-    samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samplerDescription.AddressU = IsHorizontal(configuration_.direction)
-        ? D3D11_TEXTURE_ADDRESS_WRAP
-        : D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.AddressV = IsHorizontal(configuration_.direction)
-        ? D3D11_TEXTURE_ADDRESS_CLAMP
-        : D3D11_TEXTURE_ADDRESS_WRAP;
-    samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
-    result = device_->CreateSamplerState(&samplerDescription, &sampler_);
+    result = CreateSampler(configuration_, sampler_);
     if (FAILED(result)) {
         return result;
     }
@@ -386,6 +398,22 @@ HRESULT Renderer::CreatePipeline(std::wstring& errorDetail) {
     ID3D11SamplerState* const samplers[] = {sampler_.Get()};
     deviceContext_->PSSetSamplers(0, 1, samplers);
     return S_OK;
+}
+
+HRESULT Renderer::CreateSampler(
+    const PanningConfiguration& configuration,
+    Microsoft::WRL::ComPtr<ID3D11SamplerState>& sampler) const {
+    D3D11_SAMPLER_DESC description{};
+    description.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    description.AddressU = IsHorizontal(configuration.direction)
+        ? D3D11_TEXTURE_ADDRESS_WRAP
+        : D3D11_TEXTURE_ADDRESS_CLAMP;
+    description.AddressV = IsHorizontal(configuration.direction)
+        ? D3D11_TEXTURE_ADDRESS_CLAMP
+        : D3D11_TEXTURE_ADDRESS_WRAP;
+    description.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    description.MaxLOD = D3D11_FLOAT32_MAX;
+    return device_->CreateSamplerState(&description, &sampler);
 }
 
 void Renderer::UpdateViewport(UINT width, UINT height) noexcept {

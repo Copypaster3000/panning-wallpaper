@@ -1,7 +1,7 @@
 #include "application.h"
 
 #include "desktop_host.h"
-#include "image_decoder.h"
+#include "settings_window.h"
 
 #include <powrprof.h>
 #include <wtsapi32.h>
@@ -10,12 +10,14 @@
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <new>
 #include <string_view>
 
 namespace panning_wallpaper {
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"PanningWallpaper.RenderSurface";
+constexpr wchar_t kWallpaperWindowClassName[] =
+    L"PanningWallpaper.RenderSurface";
 constexpr auto kFrameInterval = std::chrono::nanoseconds{1'000'000'000 / 30};
 
 [[nodiscard]] std::wstring FormatSystemError(std::wstring_view operation) {
@@ -29,123 +31,117 @@ void OutputVisibilityDiagnostic(std::wstring_view diagnostic) {
     OutputDebugStringW(message.c_str());
 }
 
+[[nodiscard]] bool HasUsableImage(const DecodedImage& image) noexcept {
+    return image.width != 0 && image.height != 0 && image.rowPitch != 0 &&
+           !image.pixels.empty();
+}
+
 }  // namespace
 
-Application::~Application() {
-    ShutdownVisibilityNotifications();
-    if (window_ != nullptr && IsWindow(window_)) {
-        DestroyWindow(window_);
-    }
-    renderer_.Shutdown();
+Application::Application() = default;
 
-    if (instance_ != nullptr) {
-        UnregisterClassW(kWindowClassName, instance_);
+Application::~Application() {
+    shuttingDown_ = true;
+    StopWallpaper();
+    settingsWindow_.reset();
+
+    if (wallpaperClassRegistered_ && instance_ != nullptr) {
+        UnregisterClassW(kWallpaperWindowClassName, instance_);
     }
 }
 
-bool Application::Initialize(
+bool Application::InitializeDirectWallpaper(
     HINSTANCE instance,
     std::wstring_view imagePath,
     const PanningConfiguration& configuration,
     std::wstring& error) {
-    if (!IsValidPanningConfiguration(configuration)) {
-        error = L"The panning configuration is invalid.";
-        return false;
-    }
-
     instance_ = instance;
-    configuration_ = configuration;
+    settingsMode_ = false;
 
     DecodedImage image;
     if (!DecodeImageFile(imagePath, image, error)) {
         return false;
     }
+    return StartWallpaper(imagePath, image, configuration, error);
+}
 
-    WNDCLASSEXW windowClass{};
-    windowClass.cbSize = sizeof(windowClass);
-    windowClass.lpfnWndProc = WindowProcedure;
-    windowClass.hInstance = instance_;
-    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    windowClass.lpszClassName = kWindowClassName;
+bool Application::InitializeSettings(
+    HINSTANCE instance,
+    std::wstring& error) {
+    instance_ = instance;
+    settingsMode_ = true;
 
-    if (RegisterClassExW(&windowClass) == 0) {
-        error = FormatSystemError(L"RegisterClassExW");
+    try {
+        settingsWindow_ = std::make_unique<SettingsWindow>(*this);
+    } catch (const std::bad_alloc&) {
+        error = L"Memory allocation for the settings window failed.";
+        return false;
+    }
+    if (!settingsWindow_->Initialize(instance_, error)) {
+        settingsWindow_.reset();
+        return false;
+    }
+    return true;
+}
+
+bool Application::ApplyWallpaper(
+    std::wstring_view imagePath,
+    const PanningConfiguration& configuration,
+    const DecodedImage* decodedImage,
+    std::wstring& error) {
+    error.clear();
+    if (imagePath.empty()) {
+        error = L"Choose an image before applying the wallpaper.";
+        return false;
+    }
+    if (!IsValidPanningConfiguration(configuration)) {
+        error = L"The wallpaper settings are invalid.";
         return false;
     }
 
-    if (!DesktopHost::Discover(desktopHost_, error)) {
-        return false;
+    if (wallpaperRunning_ && imagePath == wallpaperImagePath_) {
+        return UpdateWallpaperConfiguration(configuration, error);
     }
 
-    RECT hostClientRectangle{};
-    if (!GetClientRect(desktopHost_, &hostClientRectangle)) {
-        error = FormatSystemError(L"GetClientRect");
-        return false;
-    }
-
-    const int width = hostClientRectangle.right - hostClientRectangle.left;
-    const int height = hostClientRectangle.bottom - hostClientRectangle.top;
-    window_ = CreateWindowExW(
-        WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-        kWindowClassName,
-        L"Panning Wallpaper",
-        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        0,
-        0,
-        width,
-        height,
-        desktopHost_,
-        nullptr,
-        instance_,
-        this);
-    if (window_ == nullptr) {
-        error = FormatSystemError(L"CreateWindowExW");
-        return false;
-    }
-
-    std::wstring rendererError;
-    HRESULT result = renderer_.Initialize(
-        window_, image, configuration_, rendererError);
-    if (FAILED(result)) {
-        if (rendererError.empty()) {
-            error = std::format(
-                L"Direct3D image renderer initialization failed with HRESULT 0x{:08X}.",
-                static_cast<unsigned long>(result));
-        } else {
-            error = std::format(
-                L"Shader compilation failed with HRESULT 0x{:08X}:\n{}",
-                static_cast<unsigned long>(result),
-                rendererError);
-        }
-        return false;
-    }
-    // The immutable GPU texture now owns the image data needed at runtime.
-    image = {};
-
-    if (!RegisterHotKey(
-            window_,
-            kExitHotKeyId,
-            MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
-            'Q')) {
-        error = FormatSystemError(L"RegisterHotKey");
-        return false;
-    }
-
-    InitializeVisibilityNotifications();
-    ShowWindow(window_, SW_SHOWNOACTIVATE);
-    animationStart_ = std::chrono::steady_clock::now();
-    ReevaluateWindowCoverage();
-    if (!IsRenderingPaused()) {
-        result = RenderCurrentFrame();
-        if (FAILED(result)) {
-            error = std::format(
-                L"The initial Direct3D frame could not be presented (HRESULT 0x{:08X}).",
-                static_cast<unsigned long>(result));
+    DecodedImage decoded;
+    const DecodedImage* image = decodedImage;
+    if (image == nullptr || !HasUsableImage(*image)) {
+        if (!DecodeImageFile(imagePath, decoded, error)) {
             return false;
         }
+        image = &decoded;
     }
 
-    return true;
+    StopWallpaper();
+    return StartWallpaper(imagePath, *image, configuration, error);
+}
+
+void Application::StopWallpaper() {
+    if (wallpaperWindow_ != nullptr && IsWindow(wallpaperWindow_)) {
+        DestroyWindow(wallpaperWindow_);
+        return;
+    }
+
+    ShutdownVisibilityNotifications();
+    renderer_.Shutdown();
+    wallpaperWindow_ = nullptr;
+    desktopHost_ = nullptr;
+    wallpaperRunning_ = false;
+    wallpaperImagePath_.clear();
+    pauseReasons_ = 0;
+    frameScheduleResetRequested_ = false;
+}
+
+bool Application::IsWallpaperRunning() const noexcept {
+    return wallpaperRunning_;
+}
+
+void Application::SettingsWindowClosed() {
+    if (shuttingDown_) {
+        return;
+    }
+    StopWallpaper();
+    PostQuitMessage(0);
 }
 
 int Application::Run() {
@@ -182,6 +178,10 @@ int Application::Run() {
                 break;
             }
 
+            if (settingsWindow_ && settingsWindow_->Window() != nullptr &&
+                IsDialogMessageW(settingsWindow_->Window(), &message)) {
+                continue;
+            }
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -189,12 +189,13 @@ int Application::Run() {
             break;
         }
 
-        if (frameScheduleResetRequested_ && !IsRenderingPaused()) {
+        if (frameScheduleResetRequested_ && wallpaperRunning_ &&
+            !IsRenderingPaused()) {
             nextFrame = std::chrono::steady_clock::now();
             frameScheduleResetRequested_ = false;
         }
 
-        if (IsRenderingPaused()) {
+        if (!wallpaperRunning_ || IsRenderingPaused()) {
             if (timerArmed) {
                 if (!CancelWaitableTimer(frameTimer)) {
                     runtimeError_ = FormatSystemError(L"CancelWaitableTimer");
@@ -206,7 +207,8 @@ int Application::Run() {
         }
 
         const auto now = std::chrono::steady_clock::now();
-        if (runtimeError_.empty() && !IsRenderingPaused() && now >= nextFrame) {
+        if (wallpaperRunning_ && runtimeError_.empty() &&
+            !IsRenderingPaused() && now >= nextFrame) {
             const HRESULT result = RenderCurrentFrame();
             if (FAILED(result)) {
                 CloseAfterFailure(L"Animation frame presentation", result);
@@ -221,7 +223,8 @@ int Application::Run() {
 
         DWORD handleCount = 0;
         const HANDLE handles[] = {frameTimer};
-        if (runtimeError_.empty() && !IsRenderingPaused()) {
+        if (wallpaperRunning_ && runtimeError_.empty() &&
+            !IsRenderingPaused()) {
             using HundredNanoseconds =
                 std::chrono::duration<LONGLONG, std::ratio<1, 10'000'000>>;
             const auto remaining = nextFrame - now;
@@ -262,7 +265,7 @@ const std::wstring& Application::RuntimeError() const noexcept {
     return runtimeError_;
 }
 
-LRESULT CALLBACK Application::WindowProcedure(
+LRESULT CALLBACK Application::WallpaperWindowProcedure(
     HWND window,
     UINT message,
     WPARAM parameter,
@@ -271,22 +274,22 @@ LRESULT CALLBACK Application::WindowProcedure(
         GetWindowLongPtrW(window, GWLP_USERDATA));
 
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(secondaryParameter);
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(
+            secondaryParameter);
         application = static_cast<Application*>(create->lpCreateParams);
-        application->window_ = window;
+        application->wallpaperWindow_ = window;
         SetWindowLongPtrW(
             window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(application));
     }
 
     if (application != nullptr) {
-        return application->HandleMessage(
+        return application->HandleWallpaperMessage(
             window, message, parameter, secondaryParameter);
     }
-
     return DefWindowProcW(window, message, parameter, secondaryParameter);
 }
 
-LRESULT Application::HandleMessage(
+LRESULT Application::HandleWallpaperMessage(
     HWND window,
     UINT message,
     WPARAM parameter,
@@ -296,20 +299,44 @@ LRESULT Application::HandleMessage(
         DestroyWindow(window);
         return 0;
 
-    case WM_DESTROY:
+    case WM_DESTROY: {
+        const bool wasRunning = wallpaperRunning_;
+        const std::wstring failure = runtimeError_;
         ShutdownVisibilityNotifications();
         UnregisterHotKey(window, kExitHotKeyId);
         renderer_.Shutdown();
-        window_ = nullptr;
-        PostQuitMessage(runtimeError_.empty() ? 0 : 1);
+        wallpaperWindow_ = nullptr;
+        desktopHost_ = nullptr;
+        wallpaperRunning_ = false;
+        wallpaperImagePath_.clear();
+        pauseReasons_ = 0;
+        frameScheduleResetRequested_ = false;
+
+        if (settingsMode_) {
+            if (settingsWindow_) {
+                settingsWindow_->SetWallpaperRunning(false);
+                if (!failure.empty()) {
+                    settingsWindow_->ShowWallpaperFailure(failure);
+                }
+            }
+            runtimeError_.clear();
+        } else if (wasRunning) {
+            PostQuitMessage(failure.empty() ? 0 : 1);
+        }
         return 0;
+    }
 
     case WM_ERASEBKGND:
         return 1;
 
     case WM_HOTKEY:
         if (parameter == kExitHotKeyId) {
-            PostMessageW(window, WM_CLOSE, 0, 0);
+            if (settingsMode_ && settingsWindow_ &&
+                settingsWindow_->Window() != nullptr) {
+                PostMessageW(settingsWindow_->Window(), WM_CLOSE, 0, 0);
+            } else {
+                PostMessageW(window, WM_CLOSE, 0, 0);
+            }
             return 0;
         }
         break;
@@ -382,14 +409,16 @@ LRESULT Application::HandleMessage(
         if (renderer_.IsInitialized() && parameter != SIZE_MINIMIZED) {
             RECT clientRectangle{};
             if (!GetClientRect(window, &clientRectangle)) {
-                CloseAfterFailure(L"Render-surface sizing", HRESULT_FROM_WIN32(GetLastError()));
+                CloseAfterFailure(
+                    L"Render-surface sizing",
+                    HRESULT_FROM_WIN32(GetLastError()));
                 return 0;
             }
 
-            const UINT width =
-                static_cast<UINT>(clientRectangle.right - clientRectangle.left);
-            const UINT height =
-                static_cast<UINT>(clientRectangle.bottom - clientRectangle.top);
+            const UINT width = static_cast<UINT>(
+                clientRectangle.right - clientRectangle.left);
+            const UINT height = static_cast<UINT>(
+                clientRectangle.bottom - clientRectangle.top);
             HRESULT result = renderer_.Resize(width, height);
             ReevaluateWindowCoverage();
             if (SUCCEEDED(result) && width != 0 && height != 0 &&
@@ -406,6 +435,136 @@ LRESULT Application::HandleMessage(
     return DefWindowProcW(window, message, parameter, secondaryParameter);
 }
 
+bool Application::RegisterWallpaperWindowClass(std::wstring& error) {
+    if (wallpaperClassRegistered_) {
+        return true;
+    }
+
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = WallpaperWindowProcedure;
+    windowClass.hInstance = instance_;
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.lpszClassName = kWallpaperWindowClassName;
+    if (RegisterClassExW(&windowClass) == 0) {
+        error = FormatSystemError(L"RegisterClassExW");
+        return false;
+    }
+    wallpaperClassRegistered_ = true;
+    return true;
+}
+
+bool Application::StartWallpaper(
+    std::wstring_view imagePath,
+    const DecodedImage& image,
+    const PanningConfiguration& configuration,
+    std::wstring& error) {
+    if (!IsValidPanningConfiguration(configuration) ||
+        !HasUsableImage(image)) {
+        error = L"The wallpaper image or settings are invalid.";
+        return false;
+    }
+    if (!RegisterWallpaperWindowClass(error)) {
+        return false;
+    }
+
+    HWND desktopHost = nullptr;
+    if (!DesktopHost::Discover(desktopHost, error)) {
+        return false;
+    }
+    RECT hostClientRectangle{};
+    if (!GetClientRect(desktopHost, &hostClientRectangle)) {
+        error = FormatSystemError(L"GetClientRect");
+        return false;
+    }
+
+    configuration_ = configuration;
+    desktopHost_ = desktopHost;
+    wallpaperWindow_ = CreateWindowExW(
+        WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+        kWallpaperWindowClassName,
+        L"Panning Wallpaper",
+        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        0,
+        0,
+        hostClientRectangle.right - hostClientRectangle.left,
+        hostClientRectangle.bottom - hostClientRectangle.top,
+        desktopHost_,
+        nullptr,
+        instance_,
+        this);
+    if (wallpaperWindow_ == nullptr) {
+        error = FormatSystemError(L"CreateWindowExW");
+        desktopHost_ = nullptr;
+        return false;
+    }
+
+    std::wstring rendererError;
+    HRESULT result = renderer_.Initialize(
+        wallpaperWindow_, image, configuration_, rendererError);
+    if (FAILED(result)) {
+        error = rendererError.empty()
+            ? std::format(
+                L"The wallpaper renderer could not start (HRESULT 0x{:08X}).",
+                static_cast<unsigned long>(result))
+            : L"The wallpaper renderer could not compile its graphics pipeline.\n" +
+                rendererError;
+        DestroyWindow(wallpaperWindow_);
+        return false;
+    }
+
+    if (!RegisterHotKey(
+            wallpaperWindow_,
+            kExitHotKeyId,
+            MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
+            'Q')) {
+        error = FormatSystemError(L"RegisterHotKey");
+        DestroyWindow(wallpaperWindow_);
+        return false;
+    }
+
+    wallpaperImagePath_ = imagePath;
+    runtimeError_.clear();
+    InitializeVisibilityNotifications();
+    ShowWindow(wallpaperWindow_, SW_SHOWNOACTIVATE);
+    animationStart_ = std::chrono::steady_clock::now();
+    wallpaperRunning_ = true;
+    frameScheduleResetRequested_ = true;
+    ReevaluateWindowCoverage();
+    if (!IsRenderingPaused()) {
+        result = RenderCurrentFrame();
+        if (FAILED(result)) {
+            error = std::format(
+                L"The initial wallpaper frame could not be displayed "
+                L"(HRESULT 0x{:08X}).",
+                static_cast<unsigned long>(result));
+            wallpaperRunning_ = false;
+            DestroyWindow(wallpaperWindow_);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Application::UpdateWallpaperConfiguration(
+    const PanningConfiguration& configuration,
+    std::wstring& error) {
+    const HRESULT result = renderer_.UpdateConfiguration(configuration);
+    if (FAILED(result)) {
+        error = std::format(
+            L"The wallpaper settings could not be applied "
+            L"(HRESULT 0x{:08X}).",
+            static_cast<unsigned long>(result));
+        return false;
+    }
+
+    configuration_ = configuration;
+    animationStart_ = std::chrono::steady_clock::now();
+    frameScheduleResetRequested_ = true;
+    ReconfigureCoverageMonitoring();
+    return true;
+}
+
 HRESULT Application::FitToDesktopHost() {
     if (!IsWindow(desktopHost_)) {
         return HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE);
@@ -414,9 +573,9 @@ HRESULT Application::FitToDesktopHost() {
     RECT hostClientRectangle{};
     if (!GetClientRect(desktopHost_, &hostClientRectangle)) {
         const DWORD error = GetLastError();
-        return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_INVALID_WINDOW_HANDLE);
+        return HRESULT_FROM_WIN32(
+            error != ERROR_SUCCESS ? error : ERROR_INVALID_WINDOW_HANDLE);
     }
-
     const int width = hostClientRectangle.right - hostClientRectangle.left;
     const int height = hostClientRectangle.bottom - hostClientRectangle.top;
     if (width <= 0 || height <= 0) {
@@ -424,18 +583,18 @@ HRESULT Application::FitToDesktopHost() {
     }
 
     RECT renderClientRectangle{};
-    if (!GetClientRect(window_, &renderClientRectangle)) {
+    if (!GetClientRect(wallpaperWindow_, &renderClientRectangle)) {
         const DWORD error = GetLastError();
-        return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_INVALID_WINDOW_HANDLE);
+        return HRESULT_FROM_WIN32(
+            error != ERROR_SUCCESS ? error : ERROR_INVALID_WINDOW_HANDLE);
     }
-
     if (renderClientRectangle.right - renderClientRectangle.left == width &&
         renderClientRectangle.bottom - renderClientRectangle.top == height) {
         return S_FALSE;
     }
 
     if (!SetWindowPos(
-            window_,
+            wallpaperWindow_,
             nullptr,
             0,
             0,
@@ -443,9 +602,9 @@ HRESULT Application::FitToDesktopHost() {
             height,
             SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER)) {
         const DWORD error = GetLastError();
-        return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
+        return HRESULT_FROM_WIN32(
+            error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
     }
-
     return S_OK;
 }
 
@@ -472,7 +631,6 @@ void Application::SetPauseReason(PauseReason reason, bool active) noexcept {
     } else {
         pauseReasons_ &= ~mask;
     }
-
     if (wasPaused && !IsRenderingPaused()) {
         frameScheduleResetRequested_ = true;
     }
@@ -486,7 +644,8 @@ void Application::ReevaluateWindowCoverage() {
 }
 
 void Application::InitializeVisibilityNotifications() {
-    if (WTSRegisterSessionNotification(window_, NOTIFY_FOR_THIS_SESSION)) {
+    if (WTSRegisterSessionNotification(
+            wallpaperWindow_, NOTIFY_FOR_THIS_SESSION)) {
         sessionNotificationsRegistered_ = true;
     } else {
         OutputVisibilityDiagnostic(std::format(
@@ -496,30 +655,43 @@ void Application::InitializeVisibilityNotifications() {
     }
 
     displayPowerNotification_ = RegisterPowerSettingNotification(
-        window_, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
+        wallpaperWindow_,
+        &GUID_CONSOLE_DISPLAY_STATE,
+        DEVICE_NOTIFY_WINDOW_HANDLE);
     if (displayPowerNotification_ == nullptr) {
         OutputVisibilityDiagnostic(std::format(
             L"RegisterPowerSettingNotification failed with Win32 error {}; "
             L"display-off pausing is unavailable.",
             GetLastError()));
     }
+    ReconfigureCoverageMonitoring();
+}
 
-    if (configuration_.pauseWhenCovered) {
+void Application::ReconfigureCoverageMonitoring() {
+    coverageMonitoringActive_ = false;
+    coverageMonitor_.Shutdown();
+    SetPauseReason(PauseReason::CoveredByWindows, false);
+
+    if (configuration_.pauseWhenCovered && wallpaperWindow_ != nullptr) {
         std::wstring diagnostic;
         coverageMonitoringActive_ = coverageMonitor_.Initialize(
-            window_, desktopHost_, kCoverageChangedMessage, diagnostic);
+            wallpaperWindow_,
+            desktopHost_,
+            kCoverageChangedMessage,
+            diagnostic);
         if (!coverageMonitoringActive_) {
             OutputVisibilityDiagnostic(diagnostic);
         }
     }
+    ReevaluateWindowCoverage();
 }
 
 void Application::ShutdownVisibilityNotifications() noexcept {
     coverageMonitoringActive_ = false;
     coverageMonitor_.Shutdown();
 
-    if (sessionNotificationsRegistered_ && window_ != nullptr) {
-        WTSUnRegisterSessionNotification(window_);
+    if (sessionNotificationsRegistered_ && wallpaperWindow_ != nullptr) {
+        WTSUnRegisterSessionNotification(wallpaperWindow_);
         sessionNotificationsRegistered_ = false;
     }
     if (displayPowerNotification_ != nullptr) {
@@ -528,7 +700,9 @@ void Application::ShutdownVisibilityNotifications() noexcept {
     }
 }
 
-void Application::CloseAfterFailure(std::wstring_view operation, HRESULT result) {
+void Application::CloseAfterFailure(
+    std::wstring_view operation,
+    HRESULT result) {
     if (runtimeError_.empty()) {
         runtimeError_ = std::format(
             L"{} failed with HRESULT 0x{:08X}.",
@@ -536,8 +710,7 @@ void Application::CloseAfterFailure(std::wstring_view operation, HRESULT result)
             static_cast<unsigned long>(result));
         OutputDebugStringW((runtimeError_ + L"\n").c_str());
     }
-
-    PostMessageW(window_, WM_CLOSE, 0, 0);
+    PostMessageW(wallpaperWindow_, WM_CLOSE, 0, 0);
 }
 
 }  // namespace panning_wallpaper

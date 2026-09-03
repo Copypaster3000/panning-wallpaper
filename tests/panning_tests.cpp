@@ -1,6 +1,8 @@
 #include "command_line.h"
 #include "coverage_geometry.h"
 #include "panning.h"
+#include "preview_image.h"
+#include "settings_model.h"
 
 #include <algorithm>
 #include <array>
@@ -40,12 +42,20 @@ bool Parse(
 void TestCommandLine() {
     using panning_wallpaper::CommandLineOptions;
     using panning_wallpaper::FitMode;
+    using panning_wallpaper::LaunchMode;
     using panning_wallpaper::PanDirection;
 
     CommandLineOptions options;
     std::wstring error;
+    Check(Parse(std::array{L"app"}, options, error),
+          "no-argument invocation opens settings mode");
+    Check(options.launchMode == LaunchMode::Settings,
+          "no-argument invocation retains settings launch mode");
+
     Check(Parse(std::array{L"app", L"image.png"}, options, error),
           "one-argument invocation parses");
+    Check(options.launchMode == LaunchMode::DirectWallpaper,
+          "image invocation retains direct-wallpaper launch mode");
     Check(options.panning.direction == PanDirection::Left,
           "default direction is left");
     CheckNear(options.panning.loopDurationSeconds, 90.0,
@@ -126,7 +136,8 @@ void TestCommandLine() {
     const auto Rejects = [&](auto arguments, const char* description) {
         Check(!Parse(arguments, options, error) && !error.empty(), description);
     };
-    Rejects(std::array{L"app"}, "missing image is rejected");
+    Rejects(std::array{L"app", L"--direction", L"left"},
+            "options without an image are rejected");
     Rejects(std::array{L"app", L"image.png", L"--unknown"},
             "unknown option is rejected");
     Rejects(std::array{L"app", L"image.png", L"--direction"},
@@ -182,6 +193,122 @@ void TestCommandLine() {
             "duplicate pause-when-covered option is rejected");
     Rejects(std::array{L"app", L"image.png", L"extra"},
             "unexpected positional argument is rejected");
+}
+
+void TestSettingsModel() {
+    using panning_wallpaper::DurationFromSlider;
+    using panning_wallpaper::DurationToSlider;
+    using panning_wallpaper::FitMode;
+    using panning_wallpaper::IsValidGuiConfiguration;
+    using panning_wallpaper::PanDirection;
+    using panning_wallpaper::PositionFromSlider;
+    using panning_wallpaper::PositionToSlider;
+    using panning_wallpaper::SettingsState;
+    using panning_wallpaper::TryParseGuiDuration;
+
+    SettingsState state;
+    Check(state.Edited().imagePath.empty(),
+          "GUI defaults have no selected image");
+    Check(state.Edited().configuration.direction == PanDirection::Left,
+          "GUI direction defaults left");
+    CheckNear(state.Edited().configuration.loopDurationSeconds, 90.0,
+              "GUI duration defaults to 90 seconds");
+    Check(state.Edited().configuration.fitMode == FitMode::Pan,
+          "GUI fit defaults pan");
+    CheckNear(state.Edited().configuration.position, 0.5,
+              "GUI position defaults centered");
+    Check(state.Edited().configuration.pauseWhenCovered,
+          "GUI covered pause defaults on");
+    Check(!state.Applied().has_value(),
+          "GUI defaults have no applied wallpaper");
+
+    CheckNear(DurationFromSlider(10), 10.0,
+              "duration slider accepts lower boundary");
+    CheckNear(DurationFromSlider(137), 137.0,
+              "duration slider preserves exact seconds");
+    CheckNear(DurationFromSlider(600), 600.0,
+              "duration slider accepts upper boundary");
+    Check(DurationToSlider(90.0) == 90,
+          "duration configuration maps to slider");
+    Check(DurationToSlider(9.0) == 10 && DurationToSlider(601.0) == 600,
+          "duration slider conversion clamps boundaries");
+    Check(DurationToSlider(1.0e100) == 600,
+          "duration slider conversion safely clamps large values");
+
+    int duration = 0;
+    Check(TryParseGuiDuration(L"137", duration) && duration == 137,
+          "exact duration text parses");
+    Check(!TryParseGuiDuration(L"", duration),
+          "empty duration text is invalid");
+    Check(!TryParseGuiDuration(L"9", duration),
+          "duration below range is invalid");
+    Check(!TryParseGuiDuration(L"601", duration),
+          "duration above range is invalid");
+    Check(!TryParseGuiDuration(L"90.5", duration),
+          "fractional GUI duration is invalid");
+
+    CheckNear(PositionFromSlider(0), 0.0,
+              "position slider maps zero");
+    CheckNear(PositionFromSlider(50), 0.5,
+              "position slider maps midpoint");
+    CheckNear(PositionFromSlider(100), 1.0,
+              "position slider maps upper boundary");
+    Check(PositionToSlider(0.25) == 25 && PositionToSlider(0.75) == 75,
+          "position configuration maps to slider");
+    Check(PositionToSlider(-1.0e100) == 0 &&
+              PositionToSlider(1.0e100) == 100,
+          "position slider conversion safely clamps large values");
+
+    Check(IsValidGuiConfiguration(state.Edited().configuration),
+          "default GUI configuration is valid");
+    auto invalid = state.Edited().configuration;
+    invalid.loopDurationSeconds = 9.0;
+    Check(!IsValidGuiConfiguration(invalid),
+          "GUI configuration rejects duration below range");
+    invalid.loopDurationSeconds = 90.5;
+    Check(!IsValidGuiConfiguration(invalid),
+          "GUI configuration rejects fractional duration");
+
+    state.Edited().imagePath = L"first.png";
+    state.MarkApplied();
+    state.Edited().imagePath = L"second.jpg";
+    state.Edited().configuration.direction = PanDirection::Down;
+    Check(state.Applied()->imagePath == L"first.png" &&
+              state.Applied()->configuration.direction == PanDirection::Left,
+          "editing does not silently mutate applied settings");
+    state.ClearApplied();
+    Check(!state.Applied().has_value() &&
+              state.Edited().imagePath == L"second.jpg",
+          "stopping clears applied state but keeps edited settings");
+}
+
+void TestPreviewImage() {
+    using panning_wallpaper::CreateBoundedPreviewImage;
+    using panning_wallpaper::DecodedImage;
+
+    DecodedImage source;
+    source.width = 4;
+    source.height = 2;
+    source.rowPitch = 16;
+    source.pixels.resize(32, 127);
+
+    DecodedImage preview;
+    std::wstring error;
+    Check(CreateBoundedPreviewImage(source, 2, 2, preview, error),
+          "preview image scales a wide image successfully");
+    Check(preview.width == 2 && preview.height == 1 &&
+              preview.rowPitch == 8 && preview.pixels.size() == 8,
+          "preview image preserves aspect ratio and bounded dimensions");
+
+    Check(CreateBoundedPreviewImage(source, 10, 10, preview, error),
+          "preview image accepts an already bounded image");
+    Check(preview.width == 4 && preview.height == 2,
+          "preview image does not upscale small source images");
+
+    source.pixels.resize(4);
+    Check(!CreateBoundedPreviewImage(source, 2, 2, preview, error) &&
+              !error.empty(),
+          "preview image rejects incomplete decoded pixels");
 }
 
 void TestCoverageGeometry() {
@@ -424,6 +551,8 @@ int main() {
     TestTiming();
     TestTransforms();
     TestCoverageGeometry();
+    TestSettingsModel();
+    TestPreviewImage();
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed.\n";
