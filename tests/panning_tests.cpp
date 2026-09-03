@@ -198,6 +198,7 @@ void TestCommandLine() {
 void TestSettingsModel() {
     using panning_wallpaper::DurationFromSlider;
     using panning_wallpaper::DurationToSlider;
+    using panning_wallpaper::CanApplyEditedSettings;
     using panning_wallpaper::FitMode;
     using panning_wallpaper::IsValidGuiConfiguration;
     using panning_wallpaper::PanDirection;
@@ -221,13 +222,23 @@ void TestSettingsModel() {
           "GUI covered pause defaults on");
     Check(!state.Applied().has_value(),
           "GUI defaults have no applied wallpaper");
+    Check(!CanApplyEditedSettings(state.Edited(), true),
+          "Apply remains unavailable without an image");
 
-    CheckNear(DurationFromSlider(10), 10.0,
-              "duration slider accepts lower boundary");
-    CheckNear(DurationFromSlider(137), 137.0,
-              "duration slider preserves exact seconds");
-    CheckNear(DurationFromSlider(600), 600.0,
-              "duration slider accepts upper boundary");
+    for (const int value : {10, 11, 60, 90, 137, 300, 599, 600}) {
+        CheckNear(
+            DurationFromSlider(value),
+            static_cast<double>(value),
+            "duration slider preserves every tested exact second value");
+        Check(DurationToSlider(DurationFromSlider(value)) == value,
+              "duration slider/configuration conversion round-trips");
+
+        int parsedDuration = 0;
+        const std::wstring text = std::to_wstring(value);
+        Check(TryParseGuiDuration(text, parsedDuration) &&
+                  DurationToSlider(parsedDuration) == value,
+              "numeric duration text maps back to the same slider value");
+    }
     Check(DurationToSlider(90.0) == 90,
           "duration configuration maps to slider");
     Check(DurationToSlider(9.0) == 10 && DurationToSlider(601.0) == 600,
@@ -268,6 +279,12 @@ void TestSettingsModel() {
     invalid.loopDurationSeconds = 90.5;
     Check(!IsValidGuiConfiguration(invalid),
           "GUI configuration rejects fractional duration");
+
+    state.Edited().imagePath = L"selected.png";
+    Check(CanApplyEditedSettings(state.Edited(), true),
+          "valid edited settings with an image allow Apply");
+    Check(!CanApplyEditedSettings(state.Edited(), false),
+          "invalid numeric duration text prevents Apply");
 
     state.Edited().imagePath = L"first.png";
     state.MarkApplied();

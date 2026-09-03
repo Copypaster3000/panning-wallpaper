@@ -91,4 +91,11 @@ bool IsValidGuiConfiguration(
                configuration.loopDurationSeconds;
 }
 
+bool CanApplyEditedSettings(
+    const WallpaperSettings& settings,
+    bool durationTextValid) noexcept {
+    return durationTextValid && !settings.imagePath.empty() &&
+           IsValidGuiConfiguration(settings.configuration);
+}
+
 }  // namespace panning_wallpaper

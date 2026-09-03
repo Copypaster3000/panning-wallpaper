@@ -36,6 +36,37 @@ void OutputVisibilityDiagnostic(std::wstring_view diagnostic) {
            !image.pixels.empty();
 }
 
+[[nodiscard]] bool ValidateImageSource(
+    std::wstring_view imagePath,
+    std::wstring& error) {
+    const std::wstring filePath(imagePath);
+    const HANDLE file = CreateFileW(
+        filePath.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        error = L"The selected image can no longer be opened. "
+                L"Choose the image again or select another file.";
+        return false;
+    }
+
+    BY_HANDLE_FILE_INFORMATION information{};
+    const bool regularFile = GetFileType(file) == FILE_TYPE_DISK &&
+        GetFileInformationByHandle(file, &information) &&
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    CloseHandle(file);
+    if (!regularFile) {
+        error = L"The selected image is no longer a readable file. "
+                L"Choose the image again or select another file.";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 Application::Application() = default;
@@ -96,6 +127,9 @@ bool Application::ApplyWallpaper(
     }
     if (!IsValidPanningConfiguration(configuration)) {
         error = L"The wallpaper settings are invalid.";
+        return false;
+    }
+    if (!ValidateImageSource(imagePath, error)) {
         return false;
     }
 

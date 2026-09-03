@@ -40,5 +40,8 @@ private:
     int& durationSeconds) noexcept;
 [[nodiscard]] bool IsValidGuiConfiguration(
     const PanningConfiguration& configuration) noexcept;
+[[nodiscard]] bool CanApplyEditedSettings(
+    const WallpaperSettings& settings,
+    bool durationTextValid) noexcept;
 
 }  // namespace panning_wallpaper

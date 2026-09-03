@@ -30,7 +30,8 @@ public:
 private:
     static LRESULT CALLBACK WindowProcedure(
         HWND window, UINT message, WPARAM wParam, LPARAM lParam);
-    LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    LRESULT HandleMessage(
+        HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 
     [[nodiscard]] bool CreateControls(std::wstring& error);
     [[nodiscard]] HWND CreateControl(

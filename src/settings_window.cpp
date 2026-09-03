@@ -231,13 +231,13 @@ LRESULT CALLBACK SettingsWindow::WindowProcedure(
     }
 
     if (self != nullptr) {
-        return self->HandleMessage(message, wParam, lParam);
+        return self->HandleMessage(window, message, wParam, lParam);
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
 LRESULT SettingsWindow::HandleMessage(
-    UINT message, WPARAM wParam, LPARAM lParam) {
+    HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
@@ -280,6 +280,8 @@ LRESULT SettingsWindow::HandleMessage(
                 DurationFromSlider(value);
             updatingControls_ = true;
             SendMessageW(durationSpinner_, UDM_SETPOS32, 0, value);
+            const std::wstring text = std::to_wstring(value);
+            SetWindowTextW(durationEdit_, text.c_str());
             updatingControls_ = false;
             durationValid_ = true;
             InvalidateRect(durationEdit_, nullptr, TRUE);
@@ -340,13 +342,13 @@ LRESULT SettingsWindow::HandleMessage(
         application_.SettingsWindowClosed();
         return 0;
     case WM_NCDESTROY:
-        SetWindowLongPtrW(window_, GWLP_USERDATA, 0);
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
         window_ = nullptr;
-        return DefWindowProcW(window_, message, wParam, lParam);
+        return DefWindowProcW(window, message, wParam, lParam);
     default:
         break;
     }
-    return DefWindowProcW(window_, message, wParam, lParam);
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 
 bool SettingsWindow::CreateControls(std::wstring& error) {
@@ -716,6 +718,8 @@ void SettingsWindow::SynchronizeControlsFromEditedState() {
     const int duration = DurationToSlider(configuration.loopDurationSeconds);
     SendMessageW(durationSlider_, TBM_SETPOS, TRUE, duration);
     SendMessageW(durationSpinner_, UDM_SETPOS32, 0, duration);
+    const std::wstring durationText = std::to_wstring(duration);
+    SetWindowTextW(durationEdit_, durationText.c_str());
     CheckRadioButton(
         window_,
         kFitPanId,
@@ -791,9 +795,8 @@ void SettingsWindow::UpdatePositionLabels() {
 }
 
 void SettingsWindow::UpdateApplyAvailability() {
-    const bool available = durationValid_ &&
-        !state_.Edited().imagePath.empty() &&
-        IsValidGuiConfiguration(state_.Edited().configuration);
+    const bool available =
+        CanApplyEditedSettings(state_.Edited(), durationValid_);
     EnableWindow(applyButton_, available ? TRUE : FALSE);
 }
 
@@ -889,8 +892,7 @@ void SettingsWindow::ChooseImage() {
 }
 
 void SettingsWindow::ApplyEditedSettings() {
-    if (!durationValid_ || state_.Edited().imagePath.empty() ||
-        !IsValidGuiConfiguration(state_.Edited().configuration)) {
+    if (!CanApplyEditedSettings(state_.Edited(), durationValid_)) {
         MessageBeep(MB_ICONWARNING);
         UpdateApplyAvailability();
         return;
