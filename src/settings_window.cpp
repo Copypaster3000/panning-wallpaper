@@ -23,6 +23,9 @@ namespace {
 constexpr wchar_t kSettingsWindowClassName[] =
     L"PanningWallpaper.SettingsWindow";
 constexpr wchar_t kSettingsWindowTitle[] = L"Panning Wallpaper";
+constexpr wchar_t kPauseCoveredLabel[] = L"Pause when fully covered";
+constexpr wchar_t kPauseCoveredNote[] =
+    L"(Transparent overlays won’t pause it)";
 constexpr DWORD kSettingsWindowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
 constexpr int kPreviewId = 101;
@@ -622,7 +625,7 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
     pauseCheckBox_ = CreateControl(
         0,
         WC_BUTTONW,
-        L"Pause when fully covered",
+        L"Pause when fully covered (Transparent overlays won’t pause it)",
         WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         kPauseCoveredId);
     statusLabel_ = CreateControl(
@@ -1310,9 +1313,6 @@ void SettingsWindow::DrawToggleControl(
     SelectObject(deviceContext, previousPen);
     SelectObject(deviceContext, previousBrush);
 
-    wchar_t text[128]{};
-    const int length = GetWindowTextW(
-        control, text, static_cast<int>(std::size(text)));
     RECT textBounds = bounds;
     textBounds.left = toggle.right + Scale(9);
     const HFONT font = reinterpret_cast<HFONT>(
@@ -1326,8 +1326,24 @@ void SettingsWindow::DrawToggleControl(
         ToColorRef(enabled ? palette_.primaryText : palette_.disabledText));
     DrawTextW(
         deviceContext,
-        text,
-        std::max(length, 0),
+        kPauseCoveredLabel,
+        static_cast<int>(std::size(kPauseCoveredLabel) - 1),
+        &textBounds,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SIZE labelSize{};
+    GetTextExtentPoint32W(
+        deviceContext,
+        kPauseCoveredLabel,
+        static_cast<int>(std::size(kPauseCoveredLabel) - 1),
+        &labelSize);
+    textBounds.left += labelSize.cx + Scale(8);
+    SetTextColor(
+        deviceContext,
+        ToColorRef(enabled ? palette_.secondaryText : palette_.disabledText));
+    DrawTextW(
+        deviceContext,
+        kPauseCoveredNote,
+        static_cast<int>(std::size(kPauseCoveredNote) - 1),
         &textBounds,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     if (previousFont != nullptr) {
