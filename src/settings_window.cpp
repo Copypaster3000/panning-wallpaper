@@ -88,6 +88,45 @@ void DrawRoundedBox(
     SelectObject(deviceContext, previousBrush);
 }
 
+void DrawRoundedOutline(
+    HDC deviceContext,
+    const RECT& bounds,
+    COLORREF color,
+    int radius) {
+    const HGDIOBJ previousBrush = SelectObject(
+        deviceContext, GetStockObject(NULL_BRUSH));
+    const HGDIOBJ previousPen = SelectObject(
+        deviceContext, GetStockObject(DC_PEN));
+    SetDCPenColor(deviceContext, color);
+    RoundRect(
+        deviceContext,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        radius,
+        radius);
+    SelectObject(deviceContext, previousPen);
+    SelectObject(deviceContext, previousBrush);
+}
+
+void DrawEllipticalOutline(
+    HDC deviceContext, const RECT& bounds, COLORREF color) {
+    const HGDIOBJ previousBrush = SelectObject(
+        deviceContext, GetStockObject(NULL_BRUSH));
+    const HGDIOBJ previousPen = SelectObject(
+        deviceContext, GetStockObject(DC_PEN));
+    SetDCPenColor(deviceContext, color);
+    Ellipse(
+        deviceContext,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom);
+    SelectObject(deviceContext, previousPen);
+    SelectObject(deviceContext, previousBrush);
+}
+
 void DrawCenteredText(
     HWND control,
     HDC deviceContext,
@@ -1160,10 +1199,15 @@ void SettingsWindow::DrawSegmentControl(
     }
     DrawCenteredText(control, deviceContext, fillBounds, textColor, displayText);
 
-    if (GetFocus() == control) {
+    if (ShouldDrawKeyboardFocus(control)) {
         RECT focus = bounds;
-        InflateRect(&focus, -Scale(4), -Scale(4));
-        DrawFocusRect(deviceContext, &focus);
+        InflateRect(&focus, -Scale(3), -Scale(3));
+        DrawRoundedOutline(
+            deviceContext,
+            focus,
+            ToColorRef(
+                selected ? palette_.selectedText : palette_.secondaryText),
+            Scale(4));
     }
 }
 
@@ -1209,10 +1253,11 @@ void SettingsWindow::DrawSliderControl(
     SelectObject(deviceContext, previousPen);
     SelectObject(deviceContext, previousBrush);
 
-    if (GetFocus() == control) {
-        RECT focus = bounds;
-        InflateRect(&focus, -Scale(2), -Scale(2));
-        DrawFocusRect(deviceContext, &focus);
+    if (ShouldDrawKeyboardFocus(control)) {
+        RECT focus = thumbBounds;
+        InflateRect(&focus, Scale(3), Scale(3));
+        DrawEllipticalOutline(
+            deviceContext, focus, ToColorRef(palette_.secondaryText));
     }
 }
 
@@ -1288,10 +1333,14 @@ void SettingsWindow::DrawToggleControl(
     if (previousFont != nullptr) {
         SelectObject(deviceContext, previousFont);
     }
-    if (GetFocus() == control) {
-        RECT focus = bounds;
-        InflateRect(&focus, -Scale(2), -Scale(2));
-        DrawFocusRect(deviceContext, &focus);
+    if (ShouldDrawKeyboardFocus(control)) {
+        RECT focus = toggle;
+        InflateRect(&focus, Scale(2), Scale(2));
+        DrawRoundedOutline(
+            deviceContext,
+            focus,
+            ToColorRef(palette_.secondaryText),
+            toggleHeight + Scale(4));
     }
 }
 
@@ -1377,10 +1426,14 @@ void SettingsWindow::DrawThemeToggleControl(
         checked ? activeText : inactiveText,
         L"Dark");
 
-    if (GetFocus() == control) {
-        RECT focus = bounds;
-        InflateRect(&focus, -Scale(2), -Scale(2));
-        DrawFocusRect(deviceContext, &focus);
+    if (ShouldDrawKeyboardFocus(control)) {
+        RECT focus = toggle;
+        InflateRect(&focus, Scale(2), Scale(2));
+        DrawRoundedOutline(
+            deviceContext,
+            focus,
+            ToColorRef(palette_.secondaryText),
+            switchHeight + Scale(4));
     }
 }
 
@@ -1476,10 +1529,15 @@ void SettingsWindow::DrawActionButton(
     }
     DrawCenteredText(control, deviceContext, buttonBounds, textColor, displayText);
 
-    if (GetFocus() == control) {
+    if (ShouldDrawKeyboardFocus(control)) {
         RECT focus = buttonBounds;
-        InflateRect(&focus, -Scale(4), -Scale(4));
-        DrawFocusRect(deviceContext, &focus);
+        InflateRect(&focus, -Scale(3), -Scale(3));
+        DrawRoundedOutline(
+            deviceContext,
+            focus,
+            ToColorRef(
+                primary ? palette_.selectedText : palette_.secondaryText),
+            Scale(4));
     }
 }
 
@@ -1514,8 +1572,8 @@ void SettingsWindow::InvalidateSliderMovement(
     HWND control, const RECT& previousThumbBounds) const noexcept {
     RECT previousBounds = previousThumbBounds;
     RECT currentThumbBounds = SliderThumbBounds(control);
-    InflateRect(&previousBounds, Scale(2), Scale(2));
-    InflateRect(&currentThumbBounds, Scale(2), Scale(2));
+    InflateRect(&previousBounds, Scale(4), Scale(4));
+    InflateRect(&currentThumbBounds, Scale(4), Scale(4));
     RECT invalidBounds{};
     UnionRect(&invalidBounds, &previousBounds, &currentThumbBounds);
     InvalidateRect(control, &invalidBounds, FALSE);
@@ -1544,6 +1602,14 @@ bool SettingsWindow::InstallControlStyling(HWND control) const {
 
 bool SettingsWindow::IsPointerOver(HWND control) const noexcept {
     return GetPropW(control, L"PanningWallpaper.PointerInside") != nullptr;
+}
+
+bool SettingsWindow::ShouldDrawKeyboardFocus(HWND control) const noexcept {
+    if (GetFocus() != control) {
+        return false;
+    }
+    const LRESULT uiState = SendMessageW(control, WM_QUERYUISTATE, 0, 0);
+    return (uiState & UISF_HIDEFOCUS) == 0;
 }
 
 LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
@@ -1604,6 +1670,8 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
         return 0;
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
+    case WM_UPDATEUISTATE:
+    case WM_CHANGEUISTATE:
     case WM_ENABLE:
     case BM_SETCHECK: {
         const LRESULT result = DefSubclassProc(control, message, wParam, lParam);
@@ -1611,6 +1679,14 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
         return result;
     }
     case WM_LBUTTONDOWN:
+        // Keep native focus ownership but hide keyboard-only cues for pointer
+        // interaction through the standard Windows UI-state mechanism.
+        SendMessageW(
+            GetAncestor(control, GA_ROOT),
+            WM_CHANGEUISTATE,
+            MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS),
+            0);
+        [[fallthrough]];
     case WM_LBUTTONUP:
     case WM_KEYDOWN:
     case WM_KEYUP: {

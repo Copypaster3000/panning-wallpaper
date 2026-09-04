@@ -59,6 +59,7 @@ private:
     void InvalidateStyledControls() const;
     [[nodiscard]] bool InstallControlStyling(HWND control) const;
     [[nodiscard]] bool IsPointerOver(HWND control) const noexcept;
+    [[nodiscard]] bool ShouldDrawKeyboardFocus(HWND control) const noexcept;
     static LRESULT CALLBACK StyledControlProcedure(
         HWND control,
         UINT message,
