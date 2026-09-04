@@ -24,9 +24,13 @@ add_executable(PanningWallpaper WIN32
     src/renderer.h
     src/settings_model.cpp
     src/settings_model.h
+    src/settings_store.cpp
+    src/settings_store.h
     src/settings_window.cpp
     src/settings_window.h
     src/ui_palette.h
+    src/tray_icon.cpp
+    src/tray_icon.h
     src/window_coverage.cpp
     src/window_coverage.h
 )
@@ -50,6 +54,7 @@ if(MSVC)
 endif()
 
 target_link_libraries(PanningWallpaper PRIVATE
+    advapi32
     comctl32
     d3d11
     d3dcompiler
@@ -94,4 +99,21 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME PanningTests COMMAND PanningTests)
+
+    add_executable(SettingsStoreTests
+        src/panning.cpp
+        src/settings_model.cpp
+        src/settings_store.cpp
+        tests/settings_store_tests.cpp
+    )
+    target_compile_features(SettingsStoreTests PRIVATE cxx_std_20)
+    target_include_directories(SettingsStoreTests PRIVATE src)
+    target_compile_definitions(SettingsStoreTests PRIVATE
+        NOMINMAX UNICODE WIN32_LEAN_AND_MEAN _UNICODE)
+    target_link_libraries(SettingsStoreTests PRIVATE advapi32)
+    if(MSVC)
+        target_compile_options(SettingsStoreTests PRIVATE
+            /EHsc /permissive- /utf-8 /W4 /Zc:__cplusplus)
+    endif()
+    add_test(NAME SettingsStoreTests COMMAND SettingsStoreTests)
 endif()

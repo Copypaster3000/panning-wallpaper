@@ -3,6 +3,8 @@
 #include "image_decoder.h"
 #include "panning.h"
 #include "renderer.h"
+#include "settings_store.h"
+#include "tray_icon.h"
 #include "window_coverage.h"
 
 #include <windows.h>
@@ -40,6 +42,11 @@ public:
     void StopWallpaper();
     [[nodiscard]] bool IsWallpaperRunning() const noexcept;
     void SettingsWindowClosed();
+    void HideSettings();
+    void OpenSettings();
+    void ExitApplication();
+    void SaveTheme(UiTheme theme);
+    [[nodiscard]] bool HandleSettingsMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     [[nodiscard]] int Run();
     [[nodiscard]] const std::wstring& RuntimeError() const noexcept;
@@ -66,6 +73,15 @@ private:
         WPARAM parameter,
         LPARAM secondaryParameter);
     [[nodiscard]] bool RegisterWallpaperWindowClass(std::wstring& error);
+    [[nodiscard]] bool ApplyWallpaperSession(
+        std::wstring_view imagePath,
+        const PanningConfiguration& configuration,
+        const DecodedImage* decodedImage,
+        std::wstring& error);
+    void StopWallpaperSession();
+    void StartAppliedWallpaper();
+    [[nodiscard]] bool CanStartAppliedWallpaper() const;
+    void ShowSettingsError(std::wstring_view error);
     [[nodiscard]] bool StartWallpaper(
         std::wstring_view imagePath,
         const DecodedImage& image,
@@ -95,6 +111,11 @@ private:
     std::wstring wallpaperImagePath_;
     std::wstring runtimeError_;
     std::unique_ptr<SettingsWindow> settingsWindow_;
+    SettingsStore settingsStore_;
+    SavedSettings savedSettings_;
+    TrayIcon trayIcon_;
+    UINT taskbarCreatedMessage_ = 0;
+    bool guiHotKeyRegistered_ = false;
     HPOWERNOTIFY displayPowerNotification_ = nullptr;
     unsigned int pauseReasons_ = 0;
     bool wallpaperClassRegistered_ = false;

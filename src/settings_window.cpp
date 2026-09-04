@@ -226,10 +226,15 @@ SettingsWindow::~SettingsWindow() {
     }
 }
 
-bool SettingsWindow::Initialize(HINSTANCE instance, std::wstring& error) {
+bool SettingsWindow::Initialize(
+    HINSTANCE instance, const SavedSettings& saved, std::wstring& error) {
     instance_ = instance;
 
-    if (!ApplyUiTheme(UiTheme::Light)) {
+    if (saved.applied) {
+        state_.Edited() = *saved.applied;
+        state_.MarkApplied();
+    }
+    if (!ApplyUiTheme(saved.theme)) {
         error = L"The settings window drawing resources could not be created.";
         return false;
     }
@@ -312,9 +317,22 @@ bool SettingsWindow::Initialize(HINSTANCE instance, std::wstring& error) {
     RECT client{};
     GetClientRect(window_, &client);
     LayoutControls(client.right, client.bottom);
-    ShowWindow(window_, SW_SHOWNORMAL);
-    UpdateWindow(window_);
-    SetFocus(chooseButton_);
+    if (saved.applied) {
+        SetWindowTextW(imagePathEdit_, state_.Edited().imagePath.c_str());
+        DecodedImage fullImage;
+        DecodedImage previewImage;
+        std::wstring previewError;
+        if (DecodeImageFile(state_.Edited().imagePath, fullImage, previewError) &&
+            CreateBoundedPreviewImage(fullImage, kPreviewMaximumWidth,
+                kPreviewMaximumHeight, previewImage, previewError)) {
+            preview_.SetImage(std::move(previewImage));
+            preview_.SetConfiguration(state_.Edited().configuration);
+            UpdateFramingAvailability();
+        } else {
+            ShowStatusError(L"Saved image unavailable. Choose another image.");
+            OutputDebugStringW(previewError.c_str());
+        }
+    }
     return true;
 }
 
@@ -326,7 +344,6 @@ void SettingsWindow::SetWallpaperRunning(bool running) {
     if (running) {
         SetWindowTextW(statusLabel_, L"\u25CF  Wallpaper is running");
     } else {
-        state_.ClearApplied();
         SetWindowTextW(statusLabel_, L"\u25CF  Wallpaper is stopped");
     }
     EnableWindow(stopButton_, running ? TRUE : FALSE);
@@ -339,7 +356,13 @@ void SettingsWindow::ShowWallpaperFailure(std::wstring_view detail) {
         message += L"\n\n";
         message.append(detail);
     }
+    application_.OpenSettings();
     ShowError(message);
+}
+
+void SettingsWindow::ShowStatusError(std::wstring_view detail) {
+    const std::wstring text(detail);
+    SetWindowTextW(statusLabel_, text.c_str());
 }
 
 LRESULT CALLBACK SettingsWindow::WindowProcedure(
@@ -362,6 +385,7 @@ LRESULT CALLBACK SettingsWindow::WindowProcedure(
 
 LRESULT SettingsWindow::HandleMessage(
     HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (application_.HandleSettingsMessage(message, wParam, lParam)) return 0;
     switch (message) {
     case WM_ERASEBKGND:
         return 1;
@@ -381,6 +405,8 @@ LRESULT SettingsWindow::HandleMessage(
                     themeToggle_,
                     theme_ == UiTheme::Dark ? BST_CHECKED : BST_UNCHECKED);
                 MessageBeep(MB_ICONWARNING);
+            } else {
+                application_.SaveTheme(theme_);
             }
             return 0;
         }
@@ -508,7 +534,7 @@ LRESULT SettingsWindow::HandleMessage(
         return 0;
     }
     case WM_CLOSE:
-        DestroyWindow(window_);
+        application_.HideSettings();
         return 0;
     case WM_DESTROY:
         application_.SettingsWindowClosed();
@@ -1953,7 +1979,6 @@ void SettingsWindow::ApplyEditedSettings() {
 
     state_.MarkApplied();
     pendingFullImage_ = {};
-    SetWallpaperRunning(true);
 }
 
 void SettingsWindow::ShowError(std::wstring_view message) const {

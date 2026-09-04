@@ -5,6 +5,7 @@
 
 #include <powrprof.h>
 #include <wtsapi32.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <chrono>
@@ -49,8 +50,7 @@ void OutputVisibilityDiagnostic(std::wstring_view diagnostic) {
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        error = L"The selected image can no longer be opened. "
-                L"Choose the image again or select another file.";
+        error = L"Image unavailable. Choose another image.";
         return false;
     }
 
@@ -60,8 +60,7 @@ void OutputVisibilityDiagnostic(std::wstring_view diagnostic) {
         (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
     CloseHandle(file);
     if (!regularFile) {
-        error = L"The selected image is no longer a readable file. "
-                L"Choose the image again or select another file.";
+        error = L"Image unavailable. Choose another image.";
         return false;
     }
     return true;
@@ -73,7 +72,11 @@ Application::Application() = default;
 
 Application::~Application() {
     shuttingDown_ = true;
-    StopWallpaper();
+    StopWallpaperSession();
+    trayIcon_.Shutdown();
+    if (guiHotKeyRegistered_ && settingsWindow_) {
+        UnregisterHotKey(settingsWindow_->Window(), kExitHotKeyId);
+    }
     settingsWindow_.reset();
 
     if (wallpaperClassRegistered_ && instance_ != nullptr) {
@@ -101,6 +104,8 @@ bool Application::InitializeSettings(
     std::wstring& error) {
     instance_ = instance;
     settingsMode_ = true;
+    std::wstring loadError;
+    savedSettings_ = settingsStore_.Load(loadError);
 
     try {
         settingsWindow_ = std::make_unique<SettingsWindow>(*this);
@@ -108,14 +113,54 @@ bool Application::InitializeSettings(
         error = L"Memory allocation for the settings window failed.";
         return false;
     }
-    if (!settingsWindow_->Initialize(instance_, error)) {
+    if (!settingsWindow_->Initialize(instance_, savedSettings_, error)) {
         settingsWindow_.reset();
         return false;
     }
+    taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
+    if (taskbarCreatedMessage_ == 0 ||
+        !RegisterHotKey(settingsWindow_->Window(), kExitHotKeyId,
+            MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'Q')) {
+        error = FormatSystemError(L"Register GUI notifications/hotkey");
+        return false;
+    }
+    guiHotKeyRegistered_ = true;
+    if (!trayIcon_.Initialize(settingsWindow_->Window())) {
+        error = L"The notification-area icon could not be created.";
+        return false;
+    }
+    if (savedSettings_.wallpaperEnabled && savedSettings_.applied) {
+        StartAppliedWallpaper();
+    }
+    OpenSettings();
+    if (!loadError.empty()) ShowSettingsError(loadError);
     return true;
 }
 
 bool Application::ApplyWallpaper(
+    std::wstring_view imagePath,
+    const PanningConfiguration& configuration,
+    const DecodedImage* decodedImage,
+    std::wstring& error) {
+    if (settingsMode_ && !IsValidGuiConfiguration(configuration)) {
+        error = L"The wallpaper settings are outside the supported GUI range.";
+        return false;
+    }
+    if (!ApplyWallpaperSession(imagePath, configuration, decodedImage, error)) return false;
+    if (settingsMode_) {
+        savedSettings_.applied = WallpaperSettings{std::wstring(imagePath), configuration};
+        savedSettings_.wallpaperEnabled = true;
+        settingsWindow_->SetWallpaperRunning(true);
+        std::wstring saveError;
+        if (!settingsStore_.SaveApplied(*savedSettings_.applied, saveError)) {
+            OpenSettings();
+            settingsWindow_->ShowError(saveError);
+        }
+    }
+    return true;
+}
+
+bool Application::ApplyWallpaperSession(
     std::wstring_view imagePath,
     const PanningConfiguration& configuration,
     const DecodedImage* decodedImage,
@@ -146,11 +191,24 @@ bool Application::ApplyWallpaper(
         image = &decoded;
     }
 
-    StopWallpaper();
+    StopWallpaperSession();
     return StartWallpaper(imagePath, *image, configuration, error);
 }
 
 void Application::StopWallpaper() {
+    StopWallpaperSession();
+    if (settingsMode_) {
+        savedSettings_.wallpaperEnabled = false;
+        settingsWindow_->SetWallpaperRunning(false);
+        std::wstring error;
+        if (!settingsStore_.SaveEnabled(false, error)) {
+            OpenSettings();
+            settingsWindow_->ShowError(error);
+        }
+    }
+}
+
+void Application::StopWallpaperSession() {
     if (wallpaperWindow_ != nullptr && IsWindow(wallpaperWindow_)) {
         DestroyWindow(wallpaperWindow_);
         return;
@@ -174,8 +232,116 @@ void Application::SettingsWindowClosed() {
     if (shuttingDown_) {
         return;
     }
-    StopWallpaper();
+    StopWallpaperSession();
+    trayIcon_.Shutdown();
     PostQuitMessage(0);
+}
+
+void Application::OpenSettings() {
+    if (!settingsWindow_ || shuttingDown_) return;
+    const HWND window = settingsWindow_->Window();
+    ShowWindow(window, IsIconic(window) ? SW_RESTORE : SW_SHOW);
+    SetForegroundWindow(window);
+}
+
+void Application::HideSettings() {
+    if (!trayIcon_.IsRegistered()) {
+        ShowSettingsError(L"The notification-area icon is unavailable. Settings will stay open.");
+        return;
+    }
+    ShowWindow(settingsWindow_->Window(), SW_HIDE);
+    trayIcon_.NotifyHidden();
+}
+
+void Application::ExitApplication() {
+    if (shuttingDown_) return;
+    shuttingDown_ = true;
+    StopWallpaper();
+    trayIcon_.Shutdown();
+    if (guiHotKeyRegistered_) {
+        UnregisterHotKey(settingsWindow_->Window(), kExitHotKeyId);
+        guiHotKeyRegistered_ = false;
+    }
+    DestroyWindow(settingsWindow_->Window());
+    PostQuitMessage(0);
+}
+
+void Application::ShowSettingsError(std::wstring_view error) {
+    OpenSettings();
+    settingsWindow_->ShowStatusError(error);
+}
+
+void Application::SaveTheme(UiTheme theme) {
+    savedSettings_.theme = theme;
+    std::wstring error;
+    if (!settingsStore_.SaveTheme(theme, error)) {
+        OpenSettings();
+        settingsWindow_->ShowError(error);
+    }
+}
+
+void Application::StartAppliedWallpaper() {
+    if (!savedSettings_.applied) return;
+    const auto& applied = *savedSettings_.applied;
+    std::wstring error;
+    // Starting a saved session does not overwrite edited controls or re-save the configuration.
+    if (!ApplyWallpaperSession(applied.imagePath, applied.configuration, nullptr, error)) {
+        ShowSettingsError(error);
+        return;
+    }
+    settingsWindow_->SetWallpaperRunning(true);
+    if (!savedSettings_.wallpaperEnabled) {
+        savedSettings_.wallpaperEnabled = true;
+        if (!settingsStore_.SaveEnabled(true, error)) {
+            OpenSettings();
+            settingsWindow_->ShowError(error);
+        }
+    }
+}
+
+bool Application::CanStartAppliedWallpaper() const {
+    if (!savedSettings_.applied ||
+        !CanApplyEditedSettings(*savedSettings_.applied, true)) return false;
+    std::wstring error;
+    return ValidateImageSource(savedSettings_.applied->imagePath, error);
+}
+
+bool Application::HandleSettingsMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+    if (shuttingDown_) return false;
+    if (taskbarCreatedMessage_ != 0 && message == taskbarCreatedMessage_) {
+        if (!trayIcon_.Restore()) ShowSettingsError(L"The notification-area icon could not be restored.");
+        return true;
+    }
+    if (message == WM_HOTKEY && wParam == kExitHotKeyId) {
+        ExitApplication();
+        return true;
+    }
+    if (message != TrayIcon::kCallbackMessage) return false;
+    switch (LOWORD(lParam)) {
+    case NIN_SELECT:
+    case NIN_KEYSELECT:
+    case NIN_BALLOONUSERCLICK:
+        OpenSettings();
+        break;
+    case WM_CONTEXTMENU: {
+        POINT anchor{GET_X_LPARAM(wParam), GET_Y_LPARAM(wParam)};
+        if (anchor.x == -1 && anchor.y == -1) GetCursorPos(&anchor);
+        // Validate only when opening a stopped-state menu, never in the background.
+        const bool canStart = !wallpaperRunning_ && CanStartAppliedWallpaper();
+        switch (trayIcon_.ShowMenu(wallpaperRunning_, canStart, anchor)) {
+        case TrayIcon::Command::OpenSettings: OpenSettings(); break;
+        case TrayIcon::Command::ToggleWallpaper:
+            if (wallpaperRunning_) StopWallpaper();
+            else StartAppliedWallpaper();
+            break;
+        case TrayIcon::Command::Exit: ExitApplication(); break;
+        case TrayIcon::Command::None: break;
+        }
+        break;
+    }
+    default: break;
+    }
+    return true;
 }
 
 int Application::Run() {
@@ -337,7 +503,7 @@ LRESULT Application::HandleWallpaperMessage(
         const bool wasRunning = wallpaperRunning_;
         const std::wstring failure = runtimeError_;
         ShutdownVisibilityNotifications();
-        UnregisterHotKey(window, kExitHotKeyId);
+        if (!settingsMode_) UnregisterHotKey(window, kExitHotKeyId);
         renderer_.Shutdown();
         wallpaperWindow_ = nullptr;
         desktopHost_ = nullptr;
@@ -367,7 +533,7 @@ LRESULT Application::HandleWallpaperMessage(
         if (parameter == kExitHotKeyId) {
             if (settingsMode_ && settingsWindow_ &&
                 settingsWindow_->Window() != nullptr) {
-                PostMessageW(settingsWindow_->Window(), WM_CLOSE, 0, 0);
+                ExitApplication();
             } else {
                 PostMessageW(window, WM_CLOSE, 0, 0);
             }
@@ -547,7 +713,7 @@ bool Application::StartWallpaper(
         return false;
     }
 
-    if (!RegisterHotKey(
+    if (!settingsMode_ && !RegisterHotKey(
             wallpaperWindow_,
             kExitHotKeyId,
             MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,

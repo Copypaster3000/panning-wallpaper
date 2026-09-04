@@ -2,6 +2,7 @@
 
 #include "preview_window.h"
 #include "settings_model.h"
+#include "settings_store.h"
 #include "ui_palette.h"
 
 #include <windows.h>
@@ -22,11 +23,14 @@ public:
     SettingsWindow(const SettingsWindow&) = delete;
     SettingsWindow& operator=(const SettingsWindow&) = delete;
 
-    [[nodiscard]] bool Initialize(HINSTANCE instance, std::wstring& error);
+    [[nodiscard]] bool Initialize(
+        HINSTANCE instance, const SavedSettings& saved, std::wstring& error);
     [[nodiscard]] HWND Window() const noexcept;
 
     void SetWallpaperRunning(bool running);
     void ShowWallpaperFailure(std::wstring_view detail);
+    void ShowStatusError(std::wstring_view detail);
+    void ShowError(std::wstring_view message) const;
 
 private:
     static LRESULT CALLBACK WindowProcedure(
@@ -77,7 +81,6 @@ private:
     void UpdateApplyAvailability();
     void ChooseImage();
     void ApplyEditedSettings();
-    void ShowError(std::wstring_view message) const;
 
     [[nodiscard]] int Scale(int logicalPixels) const noexcept;
     [[nodiscard]] int CheckedDirectionButton() const noexcept;

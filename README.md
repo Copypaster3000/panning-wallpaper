@@ -4,7 +4,7 @@ Panning Wallpaper is a lightweight native Windows application for smoothly
 panning still-image wallpapers. The project is under development; the current
 milestone provides Windows desktop hosting, Direct3D 11 still-image panning,
 visibility-aware rendering behind the desktop icons, and a lightweight native
-settings interface.
+settings interface with background operation and notification-area controls.
 
 ## Requirements
 
@@ -25,9 +25,20 @@ cmake --build build --config Release
 Choose a PNG or JPEG image, adjust the direction, loop duration, fit, framing
 position, and covered-window pause setting, then select **Apply Wallpaper**.
 The same window can update a running wallpaper or stop it.
+Closing Settings leaves the application and wallpaper running in the Windows
+notification area. Click its icon to reopen Settings, or right-click for
+**Open Settings**, **Start/Stop Wallpaper**, and **Exit**.
+
+The last successfully applied configuration and Light/Dark theme are remembered
+per user under `HKCU\Software\PanningWallpaper`. Unapplied edits stay in memory
+while Settings is hidden, but are not saved across restarts. Tray Start uses the
+last applied configuration. On launch, Settings opens normally and wallpaper
+resumes if it was previously active. Stop or explicit Exit disables that resume;
+Windows shutdown does not. Missing saved images leave the wallpaper stopped so
+you can choose another image. **Start with Windows is not yet implemented.**
 
 Advanced command-line use remains available and starts the wallpaper directly
-without opening settings:
+without opening settings, creating a tray icon, or reading/writing saved GUI settings:
 
 ```text
 PanningWallpaper.exe <image-path> [--direction <left|right|up|down>]
@@ -48,8 +59,6 @@ Imaging Component.
 
 The rendering cadence remains fixed at approximately 30 FPS. Press
 `Ctrl+Alt+Shift+Q` to exit cleanly and restore the normal desktop wallpaper.
-In this milestone, closing the settings application also stops the wallpaper;
-settings are not persisted between launches yet.
 
 ## Visibility-aware rendering
 
