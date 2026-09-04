@@ -2,6 +2,7 @@
 
 #include "preview_window.h"
 #include "settings_model.h"
+#include "ui_palette.h"
 
 #include <windows.h>
 
@@ -48,7 +49,13 @@ private:
     void DrawSegmentControl(HWND control, HDC deviceContext, const RECT& bounds);
     void DrawSliderControl(HWND control, HDC deviceContext, const RECT& bounds);
     void DrawToggleControl(HWND control, HDC deviceContext, const RECT& bounds);
+    void DrawThemeToggleControl(
+        HWND control, HDC deviceContext, const RECT& bounds);
+    void DrawSpinnerControl(HWND control, HDC deviceContext, const RECT& bounds);
     void DrawActionButton(HWND control, HDC deviceContext, const RECT& bounds);
+    [[nodiscard]] RECT SliderThumbBounds(HWND control) const noexcept;
+    void InvalidateSliderMovement(
+        HWND control, const RECT& previousThumbBounds) const noexcept;
     void InvalidateStyledControls() const;
     [[nodiscard]] bool InstallControlStyling(HWND control) const;
     [[nodiscard]] bool IsPointerOver(HWND control) const noexcept;
@@ -59,10 +66,13 @@ private:
         LPARAM lParam,
         UINT_PTR subclassId,
         DWORD_PTR referenceData);
+    [[nodiscard]] bool ApplyUiTheme(UiTheme theme) noexcept;
+    void UpdateTitleBarTheme() const noexcept;
     void SynchronizeControlsFromEditedState();
     void UpdateEditedConfigurationFromControls(int clickedControlId);
     void UpdateDurationFromEdit();
-    void UpdatePositionLabels();
+    void UpdateDirectionDependentControls();
+    void UpdateFramingAvailability();
     void UpdateApplyAvailability();
     void ChooseImage();
     void ApplyEditedSettings();
@@ -76,6 +86,7 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND window_ = nullptr;
 
+    HWND themeToggle_ = nullptr;
     PreviewWindow preview_;
     HWND imageLabel_ = nullptr;
     HWND imagePathEdit_ = nullptr;
@@ -109,6 +120,8 @@ private:
     RECT directionGroupBounds_{};
     RECT fitGroupBounds_{};
     UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
+    UiTheme theme_ = UiTheme::Light;
+    UiPalette palette_ = kLightPalette;
     SettingsState state_;
     DecodedImage pendingFullImage_;
     bool durationValid_ = true;

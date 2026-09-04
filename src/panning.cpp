@@ -85,4 +85,28 @@ PanTransform CalculatePanTransform(
     return transform;
 }
 
+bool HasFramingEffect(
+    const PanningConfiguration& configuration,
+    std::uint32_t viewportWidth,
+    std::uint32_t viewportHeight,
+    std::uint32_t imageWidth,
+    std::uint32_t imageHeight) noexcept {
+    if (viewportWidth == 0 || viewportHeight == 0 ||
+        imageWidth == 0 || imageHeight == 0) {
+        return false;
+    }
+    const PanTransform transform = CalculatePanTransform(
+        configuration,
+        0.0,
+        viewportWidth,
+        viewportHeight,
+        imageWidth,
+        imageHeight);
+    // Framing operates perpendicular to motion. A sample scale below one on
+    // that axis means the scaled image extends beyond the viewport.
+    return IsHorizontal(configuration.direction)
+        ? transform.scaleV < 1.0F
+        : transform.scaleU < 1.0F;
+}
+
 }  // namespace panning_wallpaper

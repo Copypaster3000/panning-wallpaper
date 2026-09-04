@@ -4,6 +4,7 @@
 #include "preview_image.h"
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <shobjidl.h>
 #include <windowsx.h>
 
@@ -49,25 +50,19 @@ constexpr int kPauseCoveredId = 122;
 constexpr int kStatusId = 123;
 constexpr int kStopId = 124;
 constexpr int kApplyId = 125;
+constexpr int kThemeToggleId = 126;
 
 constexpr int kPreviewMaximumWidth = 1024;
 constexpr int kPreviewMaximumHeight = 576;
 
-constexpr COLORREF kWindowColor = RGB(247, 246, 244);
-constexpr COLORREF kPanelColor = RGB(252, 251, 249);
-constexpr COLORREF kControlColor = RGB(248, 247, 245);
-constexpr COLORREF kControlHoverColor = RGB(241, 240, 237);
-constexpr COLORREF kBorderColor = RGB(218, 216, 212);
-constexpr COLORREF kPrimaryTextColor = RGB(55, 53, 51);
-constexpr COLORREF kSecondaryTextColor = RGB(112, 109, 105);
-constexpr COLORREF kSelectedColor = RGB(89, 87, 83);
-constexpr COLORREF kSelectedHoverColor = RGB(74, 72, 69);
-constexpr COLORREF kSelectedPressedColor = RGB(65, 63, 60);
-constexpr COLORREF kDisabledFillColor = RGB(225, 223, 219);
-constexpr COLORREF kDisabledTextColor = RGB(145, 142, 138);
-constexpr COLORREF kWhiteColor = RGB(255, 255, 255);
-
 constexpr UINT_PTR kControlSubclassId = 1;
+
+[[nodiscard]] constexpr COLORREF ToColorRef(std::uint32_t color) noexcept {
+    const auto red = static_cast<COLORREF>((color >> 16U) & 0xFFU);
+    const auto green = static_cast<COLORREF>((color >> 8U) & 0xFFU);
+    const auto blue = static_cast<COLORREF>(color & 0xFFU);
+    return red | (green << 8U) | (blue << 16U);
+}
 
 void DrawRoundedBox(
     HDC deviceContext,
@@ -192,12 +187,7 @@ SettingsWindow::~SettingsWindow() {
 bool SettingsWindow::Initialize(HINSTANCE instance, std::wstring& error) {
     instance_ = instance;
 
-    windowBrush_ = CreateSolidBrush(kWindowColor);
-    panelBrush_ = CreateSolidBrush(kPanelColor);
-    controlBrush_ = CreateSolidBrush(kControlColor);
-    invalidEditBrush_ = CreateSolidBrush(RGB(255, 232, 232));
-    if (windowBrush_ == nullptr || panelBrush_ == nullptr ||
-        controlBrush_ == nullptr || invalidEditBrush_ == nullptr) {
+    if (!ApplyUiTheme(UiTheme::Light)) {
         error = L"The settings window drawing resources could not be created.";
         return false;
     }
@@ -274,6 +264,7 @@ bool SettingsWindow::Initialize(HINSTANCE instance, std::wstring& error) {
         return false;
     }
 
+    UpdateTitleBarTheme();
     UpdateFonts();
     SynchronizeControlsFromEditedState();
     RECT client{};
@@ -338,6 +329,19 @@ LRESULT SettingsWindow::HandleMessage(
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
         const int notification = HIWORD(wParam);
+        if (id == kThemeToggleId && notification == BN_CLICKED) {
+            const UiTheme requestedTheme =
+                Button_GetCheck(themeToggle_) == BST_CHECKED
+                ? UiTheme::Dark
+                : UiTheme::Light;
+            if (!ApplyUiTheme(requestedTheme)) {
+                Button_SetCheck(
+                    themeToggle_,
+                    theme_ == UiTheme::Dark ? BST_CHECKED : BST_UNCHECKED);
+                MessageBeep(MB_ICONWARNING);
+            }
+            return 0;
+        }
         if (id == kChooseImageId && notification == BN_CLICKED) {
             ChooseImage();
             return 0;
@@ -396,28 +400,39 @@ LRESULT SettingsWindow::HandleMessage(
     case WM_CTLCOLOREDIT:
         if (reinterpret_cast<HWND>(lParam) == durationEdit_ && !durationValid_) {
             const HDC deviceContext = reinterpret_cast<HDC>(wParam);
-            SetBkColor(deviceContext, RGB(255, 232, 232));
-            SetTextColor(deviceContext, RGB(128, 0, 0));
+            SetBkColor(
+                deviceContext, ToColorRef(palette_.errorBackground));
+            SetTextColor(deviceContext, ToColorRef(palette_.errorText));
             return reinterpret_cast<LRESULT>(invalidEditBrush_);
         }
-        SetBkColor(reinterpret_cast<HDC>(wParam), kControlColor);
-        SetTextColor(reinterpret_cast<HDC>(wParam), kPrimaryTextColor);
+        SetBkColor(
+            reinterpret_cast<HDC>(wParam),
+            ToColorRef(palette_.controlSurface));
+        SetTextColor(
+            reinterpret_cast<HDC>(wParam),
+            ToColorRef(palette_.primaryText));
         return reinterpret_cast<LRESULT>(controlBrush_);
     case WM_CTLCOLORSTATIC: {
         const HWND control = reinterpret_cast<HWND>(lParam);
         const int id = GetDlgCtrlID(control);
         const HDC deviceContext = reinterpret_cast<HDC>(wParam);
         if (control == imagePathEdit_) {
-            SetBkColor(deviceContext, kControlColor);
-            SetTextColor(deviceContext, kSecondaryTextColor);
+            SetBkColor(
+                deviceContext, ToColorRef(palette_.controlSurface));
+            SetTextColor(
+                deviceContext, ToColorRef(palette_.secondaryText));
             return reinterpret_cast<LRESULT>(controlBrush_);
         }
-        SetBkColor(deviceContext, kPanelColor);
+        SetBkColor(deviceContext, ToColorRef(palette_.panelBackground));
         const bool secondary = id == kPositionStartId || id == kPositionEndId ||
             id == kSecondsLabelId || id == kStatusId || id == kImagePathId;
         SetTextColor(
             deviceContext,
-            secondary ? kSecondaryTextColor : kPrimaryTextColor);
+            ToColorRef(
+                !IsWindowEnabled(control)
+                    ? palette_.disabledText
+                    : (secondary ? palette_.secondaryText
+                                 : palette_.primaryText)));
         return reinterpret_cast<LRESULT>(panelBrush_);
     }
     case WM_SIZE:
@@ -484,6 +499,12 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
         L"Choose Image...",
         WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         kChooseImageId);
+    themeToggle_ = CreateControl(
+        0,
+        WC_BUTTONW,
+        L"Light / Dark appearance",
+        WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTOCHECKBOX,
+        kThemeToggleId);
     directionLabel_ = CreateControl(
         0, WC_STATICW, L"Direction", WS_VISIBLE | SS_CENTERIMAGE, kDirectionLabelId);
     directionButtons_[0] = CreateControl(
@@ -522,17 +543,29 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
     secondsLabel_ = CreateControl(
         0, WC_STATICW, L"seconds", WS_VISIBLE | SS_CENTERIMAGE, kSecondsLabelId);
     fitLabel_ = CreateControl(
-        0, WC_STATICW, L"Fit", WS_VISIBLE | SS_CENTERIMAGE, kFitLabelId);
+        0,
+        WC_STATICW,
+        L"Image sizing",
+        WS_VISIBLE | SS_CENTERIMAGE,
+        kFitLabelId);
     fitButtons_[0] = CreateControl(
         0,
         WC_BUTTONW,
-        L"Pan",
+        L"Fit height",
         WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
         kFitPanId);
     fitButtons_[1] = CreateControl(
-        0, WC_BUTTONW, L"Cover", WS_VISIBLE | BS_AUTORADIOBUTTON, kFitCoverId);
+        0,
+        WC_BUTTONW,
+        L"Fill screen",
+        WS_VISIBLE | BS_AUTORADIOBUTTON,
+        kFitCoverId);
     positionLabel_ = CreateControl(
-        0, WC_STATICW, L"Position", WS_VISIBLE | SS_CENTERIMAGE, kPositionLabelId);
+        0,
+        WC_STATICW,
+        L"Vertical framing",
+        WS_VISIBLE | SS_CENTERIMAGE,
+        kPositionLabelId);
     positionStartLabel_ = CreateControl(
         0,
         WC_STATICW,
@@ -573,7 +606,7 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
         kApplyId);
 
     const std::array requiredControls{
-        imageLabel_, imagePathEdit_, chooseButton_,
+        themeToggle_, imageLabel_, imagePathEdit_, chooseButton_,
         directionLabel_, directionButtons_[0], directionButtons_[1],
         directionButtons_[2], directionButtons_[3], durationLabel_,
         durationSlider_, durationEdit_, durationSpinner_, secondsLabel_,
@@ -614,10 +647,10 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
     SendMessageW(positionSlider_, TBM_SETPAGESIZE, 0, 10);
     SendMessageW(positionSlider_, TBM_SETTICFREQ, 10, 0);
     const std::array styledControls{
-        chooseButton_, directionButtons_[0], directionButtons_[1],
+        themeToggle_, chooseButton_, directionButtons_[0], directionButtons_[1],
         directionButtons_[2], directionButtons_[3], durationSlider_,
-        fitButtons_[0], fitButtons_[1], positionSlider_, pauseCheckBox_,
-        stopButton_, applyButton_};
+        durationSpinner_, fitButtons_[0], fitButtons_[1], positionSlider_,
+        pauseCheckBox_, stopButton_, applyButton_};
     if (std::ranges::any_of(styledControls, [this](HWND control) {
             return !InstallControlStyling(control);
         })) {
@@ -686,19 +719,31 @@ void SettingsWindow::LayoutControls(int clientWidth, int clientHeight) {
     y = settingsPanelBounds_.top + Scale(10);
     MoveWindow(imageLabel_, innerX, y, labelWidth, rowHeight, TRUE);
     const int chooseWidth = Scale(140);
+    const int themeToggleWidth = Scale(142);
+    const int controlGap = Scale(8);
+    const int imagePathWidth = std::max(
+        Scale(120),
+        contentWidth - chooseWidth - themeToggleWidth - 2 * controlGap);
     MoveWindow(
         imagePathEdit_,
         contentX,
         y,
-        std::max(Scale(80), contentWidth - chooseWidth - Scale(8)),
+        imagePathWidth,
         rowHeight,
         TRUE);
     MoveWindow(
         chooseButton_,
-        contentX + contentWidth - chooseWidth,
+        contentX + imagePathWidth + controlGap,
         y,
         chooseWidth,
         rowHeight,
+        TRUE);
+    MoveWindow(
+        themeToggle_,
+        contentX + contentWidth - themeToggleWidth,
+        y + Scale(3),
+        themeToggleWidth,
+        Scale(26),
         TRUE);
     y += rowHeight + rowGap;
 
@@ -831,6 +876,7 @@ void SettingsWindow::LayoutControls(int clientWidth, int clientHeight) {
         applyButtonWidth,
         buttonHeight,
         TRUE);
+    UpdateFramingAvailability();
     InvalidateRect(window_, nullptr, FALSE);
 }
 
@@ -861,7 +907,7 @@ void SettingsWindow::UpdateFonts() {
     }
 
     const std::array controls{
-        imageLabel_, imagePathEdit_, chooseButton_, directionLabel_,
+        themeToggle_, imageLabel_, imagePathEdit_, chooseButton_, directionLabel_,
         directionButtons_[0], directionButtons_[1], directionButtons_[2],
         directionButtons_[3], durationLabel_, durationSlider_, durationEdit_,
         durationSpinner_, secondsLabel_, fitLabel_, fitButtons_[0], fitButtons_[1],
@@ -898,6 +944,75 @@ void SettingsWindow::ApplyFont(HWND control, HFONT font) const {
     }
 }
 
+bool SettingsWindow::ApplyUiTheme(UiTheme theme) noexcept {
+    const UiPalette nextPalette = PaletteForTheme(theme);
+    HBRUSH nextWindowBrush = CreateSolidBrush(
+        ToColorRef(nextPalette.windowBackground));
+    HBRUSH nextPanelBrush = CreateSolidBrush(
+        ToColorRef(nextPalette.panelBackground));
+    HBRUSH nextControlBrush = CreateSolidBrush(
+        ToColorRef(nextPalette.controlSurface));
+    HBRUSH nextInvalidEditBrush = CreateSolidBrush(
+        ToColorRef(nextPalette.errorBackground));
+    if (nextWindowBrush == nullptr || nextPanelBrush == nullptr ||
+        nextControlBrush == nullptr || nextInvalidEditBrush == nullptr) {
+        DeleteObject(nextWindowBrush);
+        DeleteObject(nextPanelBrush);
+        DeleteObject(nextControlBrush);
+        DeleteObject(nextInvalidEditBrush);
+        return false;
+    }
+
+    HBRUSH previousWindowBrush = std::exchange(windowBrush_, nextWindowBrush);
+    HBRUSH previousPanelBrush = std::exchange(panelBrush_, nextPanelBrush);
+    HBRUSH previousControlBrush = std::exchange(controlBrush_, nextControlBrush);
+    HBRUSH previousInvalidEditBrush =
+        std::exchange(invalidEditBrush_, nextInvalidEditBrush);
+    theme_ = theme;
+    palette_ = nextPalette;
+
+    if (window_ != nullptr) {
+        SetClassLongPtrW(
+            window_,
+            GCLP_HBRBACKGROUND,
+            reinterpret_cast<LONG_PTR>(windowBrush_));
+    }
+    preview_.SetPalette(palette_);
+    UpdateTitleBarTheme();
+    if (themeToggle_ != nullptr) {
+        Button_SetCheck(
+            themeToggle_,
+            theme_ == UiTheme::Dark ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    if (window_ != nullptr) {
+        RedrawWindow(
+            window_,
+            nullptr,
+            nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+        InvalidateStyledControls();
+    }
+
+    DeleteObject(previousWindowBrush);
+    DeleteObject(previousPanelBrush);
+    DeleteObject(previousControlBrush);
+    DeleteObject(previousInvalidEditBrush);
+    return true;
+}
+
+void SettingsWindow::UpdateTitleBarTheme() const noexcept {
+    if (window_ == nullptr) {
+        return;
+    }
+    const BOOL useDarkTitleBar = theme_ == UiTheme::Dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(
+        window_,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &useDarkTitleBar,
+        sizeof(useDarkTitleBar));
+}
+
 void SettingsWindow::PaintWindow() {
     PAINTSTRUCT paint{};
     const HDC deviceContext = BeginPaint(window_, &paint);
@@ -909,26 +1024,26 @@ void SettingsWindow::PaintWindow() {
     DrawRoundedBox(
         deviceContext,
         settingsPanelBounds_,
-        kPanelColor,
-        kBorderColor,
+        ToColorRef(palette_.panelBackground),
+        ToColorRef(palette_.border),
         cardRadius);
     DrawRoundedBox(
         deviceContext,
         actionsPanelBounds_,
-        kPanelColor,
-        kBorderColor,
+        ToColorRef(palette_.panelBackground),
+        ToColorRef(palette_.border),
         cardRadius);
     DrawRoundedBox(
         deviceContext,
         directionGroupBounds_,
-        kControlColor,
-        kBorderColor,
+        ToColorRef(palette_.controlSurface),
+        ToColorRef(palette_.border),
         Scale(6));
     DrawRoundedBox(
         deviceContext,
         fitGroupBounds_,
-        kControlColor,
-        kBorderColor,
+        ToColorRef(palette_.controlSurface),
+        ToColorRef(palette_.border),
         Scale(6));
     EndPaint(window_, &paint);
 }
@@ -955,11 +1070,15 @@ void SettingsWindow::PaintStyledControl(HWND control) {
     }
 
     const int id = GetDlgCtrlID(control);
-    if ((id >= kDirectionLeftId && id <= kDirectionDownId) ||
+    if (id == kThemeToggleId) {
+        DrawThemeToggleControl(control, drawingContext, bounds);
+    } else if ((id >= kDirectionLeftId && id <= kDirectionDownId) ||
         id == kFitPanId || id == kFitCoverId) {
         DrawSegmentControl(control, drawingContext, bounds);
     } else if (id == kDurationSliderId || id == kPositionSliderId) {
         DrawSliderControl(control, drawingContext, bounds);
+    } else if (id == kDurationSpinnerId) {
+        DrawSpinnerControl(control, drawingContext, bounds);
     } else if (id == kPauseCoveredId) {
         DrawToggleControl(control, drawingContext, bounds);
     } else {
@@ -992,15 +1111,18 @@ void SettingsWindow::DrawSegmentControl(
     const bool pressed =
         (Button_GetState(control) & BST_PUSHED) == BST_PUSHED;
 
-    COLORREF fillColor = kControlColor;
-    COLORREF textColor = enabled ? kPrimaryTextColor : kDisabledTextColor;
+    COLORREF fillColor = ToColorRef(palette_.controlSurface);
+    COLORREF textColor = ToColorRef(
+        enabled ? palette_.primaryText : palette_.disabledText);
     if (selected) {
         fillColor = pressed
-            ? kSelectedPressedColor
-            : (hovered ? kSelectedHoverColor : kSelectedColor);
-        textColor = enabled ? kWhiteColor : kDisabledTextColor;
+            ? ToColorRef(palette_.selectedPressed)
+            : ToColorRef(
+                  hovered ? palette_.selectedHover : palette_.selectedSurface);
+        textColor = ToColorRef(
+            enabled ? palette_.selectedText : palette_.disabledText);
     } else if (hovered && enabled) {
-        fillColor = kControlHoverColor;
+        fillColor = ToColorRef(palette_.controlHover);
     }
     RECT fillBounds = bounds;
     SetDCBrushColor(deviceContext, fillColor);
@@ -1013,7 +1135,7 @@ void SettingsWindow::DrawSegmentControl(
     if (id != kDirectionLeftId && id != kFitPanId) {
         const HGDIOBJ previousPen = SelectObject(
             deviceContext, GetStockObject(DC_PEN));
-        SetDCPenColor(deviceContext, kBorderColor);
+        SetDCPenColor(deviceContext, ToColorRef(palette_.border));
         MoveToEx(deviceContext, bounds.left, bounds.top + Scale(5), nullptr);
         LineTo(deviceContext, bounds.left, bounds.bottom - Scale(5));
         SelectObject(deviceContext, previousPen);
@@ -1050,26 +1172,15 @@ void SettingsWindow::DrawSliderControl(
     FillRect(deviceContext, &bounds, panelBrush_);
     const bool enabled = IsWindowEnabled(control) != FALSE;
     const bool hovered = IsPointerOver(control);
-    const int minimum = static_cast<int>(
-        SendMessageW(control, TBM_GETRANGEMIN, 0, 0));
-    const int maximum = static_cast<int>(
-        SendMessageW(control, TBM_GETRANGEMAX, 0, 0));
-    const int position = static_cast<int>(
-        SendMessageW(control, TBM_GETPOS, 0, 0));
     const int thumbRadius = Scale(8);
     const int trackLeft = bounds.left + thumbRadius + Scale(2);
     const int trackRight = bounds.right - thumbRadius - Scale(2);
     const int trackY = (bounds.top + bounds.bottom) / 2;
-    const double progress = maximum > minimum
-        ? static_cast<double>(position - minimum) /
-              static_cast<double>(maximum - minimum)
-        : 0.0;
-    const int thumbX = trackLeft + static_cast<int>(std::lround(
-        progress * static_cast<double>(trackRight - trackLeft)));
 
     RECT track{
         trackLeft, trackY - Scale(1), trackRight, trackY + Scale(2)};
-    const COLORREF trackColor = enabled ? kBorderColor : kDisabledFillColor;
+    const COLORREF trackColor = ToColorRef(
+        enabled ? palette_.sliderTrack : palette_.disabledSurface);
     SetDCBrushColor(deviceContext, trackColor);
     FillRect(
         deviceContext,
@@ -1080,17 +1191,21 @@ void SettingsWindow::DrawSliderControl(
         deviceContext, GetStockObject(DC_BRUSH));
     const HGDIOBJ previousPen = SelectObject(
         deviceContext, GetStockObject(DC_PEN));
-    SetDCBrushColor(deviceContext, enabled ? kPanelColor : kControlColor);
+    SetDCBrushColor(
+        deviceContext,
+        ToColorRef(enabled ? palette_.sliderThumb : palette_.disabledSurface));
     SetDCPenColor(
         deviceContext,
-        !enabled ? kDisabledTextColor
-                 : (hovered ? kSelectedColor : kBorderColor));
+        ToColorRef(
+            !enabled ? palette_.disabledText
+                     : (hovered ? palette_.selectedSurface : palette_.border)));
+    const RECT thumbBounds = SliderThumbBounds(control);
     Ellipse(
         deviceContext,
-        thumbX - thumbRadius,
-        trackY - thumbRadius,
-        thumbX + thumbRadius + 1,
-        trackY + thumbRadius + 1);
+        thumbBounds.left,
+        thumbBounds.top,
+        thumbBounds.right,
+        thumbBounds.bottom);
     SelectObject(deviceContext, previousPen);
     SelectObject(deviceContext, previousBrush);
 
@@ -1115,11 +1230,18 @@ void SettingsWindow::DrawToggleControl(
         bounds.left + toggleWidth,
         (bounds.top + bounds.bottom + toggleHeight) / 2};
     const COLORREF fillColor = !enabled
-        ? kDisabledFillColor
-        : (checked ? (hovered ? kSelectedHoverColor : kSelectedColor)
-                   : (hovered ? kControlHoverColor : kControlColor));
+        ? ToColorRef(palette_.disabledSurface)
+        : (checked
+               ? ToColorRef(
+                     hovered ? palette_.selectedHover : palette_.selectedSurface)
+               : ToColorRef(
+                     hovered ? palette_.controlHover : palette_.toggleOff));
     DrawRoundedBox(
-        deviceContext, toggle, fillColor, kBorderColor, toggleHeight);
+        deviceContext,
+        toggle,
+        fillColor,
+        ToColorRef(palette_.border),
+        toggleHeight);
 
     const int thumbRadius = Scale(7);
     const int thumbCenterX = checked
@@ -1130,8 +1252,10 @@ void SettingsWindow::DrawToggleControl(
         deviceContext, GetStockObject(DC_BRUSH));
     const HGDIOBJ previousPen = SelectObject(
         deviceContext, GetStockObject(DC_PEN));
-    SetDCBrushColor(deviceContext, kWhiteColor);
-    SetDCPenColor(deviceContext, checked ? kWhiteColor : kBorderColor);
+    SetDCBrushColor(deviceContext, ToColorRef(palette_.toggleThumb));
+    SetDCPenColor(
+        deviceContext,
+        ToColorRef(checked ? palette_.toggleThumb : palette_.border));
     Ellipse(
         deviceContext,
         thumbCenterX - thumbRadius,
@@ -1153,7 +1277,8 @@ void SettingsWindow::DrawToggleControl(
         : nullptr;
     SetBkMode(deviceContext, TRANSPARENT);
     SetTextColor(
-        deviceContext, enabled ? kPrimaryTextColor : kDisabledTextColor);
+        deviceContext,
+        ToColorRef(enabled ? palette_.primaryText : palette_.disabledText));
     DrawTextW(
         deviceContext,
         text,
@@ -1170,6 +1295,142 @@ void SettingsWindow::DrawToggleControl(
     }
 }
 
+void SettingsWindow::DrawThemeToggleControl(
+    HWND control, HDC deviceContext, const RECT& bounds) {
+    FillRect(deviceContext, &bounds, panelBrush_);
+    const bool enabled = IsWindowEnabled(control) != FALSE;
+    const bool checked = Button_GetCheck(control) == BST_CHECKED;
+    const bool hovered = IsPointerOver(control);
+    const int switchWidth = Scale(34);
+    const int switchHeight = Scale(18);
+    const int labelWidth = Scale(38);
+    const int gap = Scale(4);
+    const int contentWidth = 2 * labelWidth + switchWidth + 2 * gap;
+    const int contentLeft = bounds.left +
+        std::max(
+            0,
+            (static_cast<int>(bounds.right - bounds.left) - contentWidth) / 2);
+
+    RECT lightLabel{
+        contentLeft,
+        bounds.top,
+        contentLeft + labelWidth,
+        bounds.bottom};
+    RECT toggle{
+        lightLabel.right + gap,
+        (bounds.top + bounds.bottom - switchHeight) / 2,
+        lightLabel.right + gap + switchWidth,
+        (bounds.top + bounds.bottom + switchHeight) / 2};
+    RECT darkLabel{
+        toggle.right + gap,
+        bounds.top,
+        toggle.right + gap + labelWidth,
+        bounds.bottom};
+
+    const COLORREF toggleFill = !enabled
+        ? ToColorRef(palette_.disabledSurface)
+        : checked
+        ? ToColorRef(
+              hovered ? palette_.selectedHover : palette_.selectedSurface)
+        : ToColorRef(hovered ? palette_.controlHover : palette_.toggleOff);
+    DrawRoundedBox(
+        deviceContext,
+        toggle,
+        toggleFill,
+        ToColorRef(palette_.border),
+        switchHeight);
+
+    const int thumbRadius = Scale(6);
+    const int thumbCenterX = checked
+        ? toggle.right - Scale(9)
+        : toggle.left + Scale(9);
+    const int thumbCenterY = (toggle.top + toggle.bottom) / 2;
+    const HGDIOBJ previousBrush = SelectObject(
+        deviceContext, GetStockObject(DC_BRUSH));
+    const HGDIOBJ previousPen = SelectObject(
+        deviceContext, GetStockObject(DC_PEN));
+    SetDCBrushColor(deviceContext, ToColorRef(palette_.toggleThumb));
+    SetDCPenColor(deviceContext, ToColorRef(palette_.toggleThumb));
+    Ellipse(
+        deviceContext,
+        thumbCenterX - thumbRadius,
+        thumbCenterY - thumbRadius,
+        thumbCenterX + thumbRadius + 1,
+        thumbCenterY + thumbRadius + 1);
+    SelectObject(deviceContext, previousPen);
+    SelectObject(deviceContext, previousBrush);
+
+    const COLORREF activeText = ToColorRef(
+        enabled ? palette_.primaryText : palette_.disabledText);
+    const COLORREF inactiveText = ToColorRef(
+        enabled ? palette_.secondaryText : palette_.disabledText);
+    DrawCenteredText(
+        control,
+        deviceContext,
+        lightLabel,
+        checked ? inactiveText : activeText,
+        L"Light");
+    DrawCenteredText(
+        control,
+        deviceContext,
+        darkLabel,
+        checked ? activeText : inactiveText,
+        L"Dark");
+
+    if (GetFocus() == control) {
+        RECT focus = bounds;
+        InflateRect(&focus, -Scale(2), -Scale(2));
+        DrawFocusRect(deviceContext, &focus);
+    }
+}
+
+void SettingsWindow::DrawSpinnerControl(
+    HWND control, HDC deviceContext, const RECT& bounds) {
+    FillRect(deviceContext, &bounds, controlBrush_);
+    const bool enabled = IsWindowEnabled(control) != FALSE;
+    const bool hovered = IsPointerOver(control);
+    POINT pointer{};
+    bool upperHalfHovered = false;
+    if (hovered && GetCursorPos(&pointer) && ScreenToClient(control, &pointer)) {
+        upperHalfHovered = pointer.y < (bounds.top + bounds.bottom) / 2;
+        RECT hoverBounds = bounds;
+        if (upperHalfHovered) {
+            hoverBounds.bottom = (bounds.top + bounds.bottom) / 2;
+        } else {
+            hoverBounds.top = (bounds.top + bounds.bottom) / 2;
+        }
+        SetDCBrushColor(deviceContext, ToColorRef(palette_.controlHover));
+        FillRect(
+            deviceContext,
+            &hoverBounds,
+            reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+    }
+
+    const HGDIOBJ previousPen = SelectObject(
+        deviceContext, GetStockObject(DC_PEN));
+    SetDCPenColor(deviceContext, ToColorRef(palette_.border));
+    const int middle = (bounds.top + bounds.bottom) / 2;
+    MoveToEx(deviceContext, bounds.left, bounds.top, nullptr);
+    LineTo(deviceContext, bounds.left, bounds.bottom);
+    MoveToEx(deviceContext, bounds.left, middle, nullptr);
+    LineTo(deviceContext, bounds.right, middle);
+
+    SetDCPenColor(
+        deviceContext,
+        ToColorRef(enabled ? palette_.primaryText : palette_.disabledText));
+    const int centerX = (bounds.left + bounds.right) / 2;
+    const int chevron = std::max(Scale(2), 2);
+    const int upperY = (bounds.top + middle) / 2;
+    MoveToEx(deviceContext, centerX - chevron, upperY + Scale(1), nullptr);
+    LineTo(deviceContext, centerX, upperY - Scale(1));
+    LineTo(deviceContext, centerX + chevron + 1, upperY + Scale(1));
+    const int lowerY = (middle + bounds.bottom) / 2;
+    MoveToEx(deviceContext, centerX - chevron, lowerY - Scale(1), nullptr);
+    LineTo(deviceContext, centerX, lowerY + Scale(1));
+    LineTo(deviceContext, centerX + chevron + 1, lowerY - Scale(1));
+    SelectObject(deviceContext, previousPen);
+}
+
 void SettingsWindow::DrawActionButton(
     HWND control, HDC deviceContext, const RECT& bounds) {
     FillRect(deviceContext, &bounds, panelBrush_);
@@ -1179,20 +1440,23 @@ void SettingsWindow::DrawActionButton(
         (Button_GetState(control) & BST_PUSHED) == BST_PUSHED;
     const bool primary = GetDlgCtrlID(control) == kApplyId;
 
-    COLORREF fillColor = kControlColor;
-    COLORREF borderColor = kBorderColor;
-    COLORREF textColor = enabled ? kPrimaryTextColor : kDisabledTextColor;
+    COLORREF fillColor = ToColorRef(palette_.controlSurface);
+    COLORREF borderColor = ToColorRef(palette_.border);
+    COLORREF textColor = ToColorRef(
+        enabled ? palette_.primaryText : palette_.disabledText);
     if (!enabled) {
-        fillColor = kDisabledFillColor;
+        fillColor = ToColorRef(palette_.disabledSurface);
     } else if (primary) {
         fillColor = pressed
-            ? kSelectedPressedColor
-            : (hovered ? kSelectedHoverColor : kSelectedColor);
+            ? ToColorRef(palette_.selectedPressed)
+            : ToColorRef(
+                  hovered ? palette_.selectedHover : palette_.selectedSurface);
         borderColor = fillColor;
-        textColor = kWhiteColor;
+        textColor = ToColorRef(palette_.selectedText);
     } else if (pressed || hovered) {
-        fillColor = pressed ? kDisabledFillColor : kControlHoverColor;
-        borderColor = kSecondaryTextColor;
+        fillColor = ToColorRef(
+            pressed ? palette_.disabledSurface : palette_.controlHover);
+        borderColor = ToColorRef(palette_.secondaryText);
     }
 
     RECT buttonBounds = bounds;
@@ -1219,12 +1483,50 @@ void SettingsWindow::DrawActionButton(
     }
 }
 
+RECT SettingsWindow::SliderThumbBounds(HWND control) const noexcept {
+    RECT bounds{};
+    GetClientRect(control, &bounds);
+    const int minimum = static_cast<int>(
+        SendMessageW(control, TBM_GETRANGEMIN, 0, 0));
+    const int maximum = static_cast<int>(
+        SendMessageW(control, TBM_GETRANGEMAX, 0, 0));
+    const int position = static_cast<int>(
+        SendMessageW(control, TBM_GETPOS, 0, 0));
+    const int thumbRadius = Scale(8);
+    const int trackLeft = bounds.left + thumbRadius + Scale(2);
+    const int trackRight = bounds.right - thumbRadius - Scale(2);
+    const double progress = maximum > minimum
+        ? static_cast<double>(position - minimum) /
+              static_cast<double>(maximum - minimum)
+        : 0.0;
+    const int thumbX = trackLeft + static_cast<int>(std::lround(
+        progress * static_cast<double>(trackRight - trackLeft)));
+    const int thumbY = (bounds.top + bounds.bottom) / 2;
+    RECT thumbBounds{
+        thumbX - thumbRadius,
+        thumbY - thumbRadius,
+        thumbX + thumbRadius + 1,
+        thumbY + thumbRadius + 1};
+    return thumbBounds;
+}
+
+void SettingsWindow::InvalidateSliderMovement(
+    HWND control, const RECT& previousThumbBounds) const noexcept {
+    RECT previousBounds = previousThumbBounds;
+    RECT currentThumbBounds = SliderThumbBounds(control);
+    InflateRect(&previousBounds, Scale(2), Scale(2));
+    InflateRect(&currentThumbBounds, Scale(2), Scale(2));
+    RECT invalidBounds{};
+    UnionRect(&invalidBounds, &previousBounds, &currentThumbBounds);
+    InvalidateRect(control, &invalidBounds, FALSE);
+}
+
 void SettingsWindow::InvalidateStyledControls() const {
     const std::array controls{
-        chooseButton_, directionButtons_[0], directionButtons_[1],
+        themeToggle_, chooseButton_, directionButtons_[0], directionButtons_[1],
         directionButtons_[2], directionButtons_[3], durationSlider_,
-        fitButtons_[0], fitButtons_[1], positionSlider_, pauseCheckBox_,
-        stopButton_, applyButton_};
+        durationSpinner_, fitButtons_[0], fitButtons_[1], positionSlider_,
+        pauseCheckBox_, stopButton_, applyButton_};
     for (HWND control : controls) {
         if (control != nullptr) {
             InvalidateRect(control, nullptr, FALSE);
@@ -1254,11 +1556,25 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
     auto* self = reinterpret_cast<SettingsWindow*>(referenceData);
     switch (message) {
     case WM_PAINT:
+        if (GetDlgCtrlID(control) == kDurationSpinnerId &&
+            self->theme_ == UiTheme::Light) {
+            return DefSubclassProc(control, message, wParam, lParam);
+        }
         self->PaintStyledControl(control);
         return 0;
     case WM_ERASEBKGND:
+        if (GetDlgCtrlID(control) == kDurationSpinnerId &&
+            self->theme_ == UiTheme::Light) {
+            return DefSubclassProc(control, message, wParam, lParam);
+        }
         return 1;
-    case WM_MOUSEMOVE:
+    case WM_MOUSEMOVE: {
+        const int controlId = GetDlgCtrlID(control);
+        const bool slider = controlId == kDurationSliderId ||
+            controlId == kPositionSliderId;
+        const RECT previousThumbBounds = slider
+            ? self->SliderThumbBounds(control)
+            : RECT{};
         if (GetPropW(control, L"PanningWallpaper.PointerInside") == nullptr) {
             SetPropW(
                 control,
@@ -1272,7 +1588,16 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
             TrackMouseEvent(&tracking);
             InvalidateRect(control, nullptr, FALSE);
         }
-        break;
+        const LRESULT result =
+            DefSubclassProc(control, message, wParam, lParam);
+        if (slider) {
+            // The native trackbar invalidates for its smaller native thumb.
+            // Include both custom-thumb extents so clipped painting clears the
+            // old position without redrawing the full settings window.
+            self->InvalidateSliderMovement(control, previousThumbBounds);
+        }
+        return result;
+    }
     case WM_MOUSELEAVE:
         RemovePropW(control, L"PanningWallpaper.PointerInside");
         InvalidateRect(control, nullptr, FALSE);
@@ -1293,6 +1618,12 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
         InvalidateRect(control, nullptr, FALSE);
         return result;
     }
+    case TBM_SETPOS: {
+        const RECT previousThumbBounds = self->SliderThumbBounds(control);
+        const LRESULT result = DefSubclassProc(control, message, wParam, lParam);
+        self->InvalidateSliderMovement(control, previousThumbBounds);
+        return result;
+    }
     case WM_NCDESTROY:
         RemovePropW(control, L"PanningWallpaper.PointerInside");
         RemoveWindowSubclass(control, StyledControlProcedure, subclassId);
@@ -1305,6 +1636,9 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
 
 void SettingsWindow::SynchronizeControlsFromEditedState() {
     updatingControls_ = true;
+    Button_SetCheck(
+        themeToggle_,
+        theme_ == UiTheme::Dark ? BST_CHECKED : BST_UNCHECKED);
     const PanningConfiguration& configuration = state_.Edited().configuration;
     CheckRadioButton(
         window_,
@@ -1331,8 +1665,8 @@ void SettingsWindow::SynchronizeControlsFromEditedState() {
         configuration.pauseWhenCovered ? BST_CHECKED : BST_UNCHECKED);
     updatingControls_ = false;
     durationValid_ = true;
-    UpdatePositionLabels();
     preview_.SetConfiguration(configuration);
+    UpdateDirectionDependentControls();
     UpdateApplyAvailability();
 }
 
@@ -1341,11 +1675,12 @@ void SettingsWindow::UpdateEditedConfigurationFromControls(int clickedControlId)
     if (clickedControlId >= kDirectionLeftId &&
         clickedControlId <= kDirectionDownId) {
         configuration.direction = DirectionFromButtonId(CheckedDirectionButton());
-        UpdatePositionLabels();
         preview_.SetConfiguration(configuration);
+        UpdateDirectionDependentControls();
     } else if (clickedControlId == kFitPanId || clickedControlId == kFitCoverId) {
         configuration.fitMode = FitFromButtonId(CheckedFitButton());
         preview_.SetConfiguration(configuration);
+        UpdateFramingAvailability();
     } else if (clickedControlId == kPauseCoveredId) {
         configuration.pauseWhenCovered =
             Button_GetCheck(pauseCheckBox_) == BST_CHECKED;
@@ -1382,12 +1717,28 @@ void SettingsWindow::UpdateDurationFromEdit() {
     UpdateApplyAvailability();
 }
 
-void SettingsWindow::UpdatePositionLabels() {
+void SettingsWindow::UpdateDirectionDependentControls() {
     const PanDirection direction = state_.Edited().configuration.direction;
     const bool vertical =
         direction == PanDirection::Up || direction == PanDirection::Down;
+    SetWindowTextW(fitButtons_[0], vertical ? L"Fit width" : L"Fit height");
+    SetWindowTextW(positionLabel_, vertical
+        ? L"Horizontal framing"
+        : L"Vertical framing");
     SetWindowTextW(positionStartLabel_, vertical ? L"Left" : L"Top");
     SetWindowTextW(positionEndLabel_, vertical ? L"Right" : L"Bottom");
+    UpdateFramingAvailability();
+}
+
+void SettingsWindow::UpdateFramingAvailability() {
+    const bool enabled = preview_.HasMeaningfulFraming();
+    const std::array framingControls{
+        positionLabel_, positionStartLabel_, positionSlider_, positionEndLabel_};
+    for (HWND control : framingControls) {
+        if ((IsWindowEnabled(control) != FALSE) != enabled) {
+            EnableWindow(control, enabled ? TRUE : FALSE);
+        }
+    }
 }
 
 void SettingsWindow::UpdateApplyAvailability() {
@@ -1484,6 +1835,7 @@ void SettingsWindow::ChooseImage() {
     SetWindowTextW(imagePathEdit_, selectedPath.c_str());
     preview_.SetImage(std::move(previewImage));
     preview_.SetConfiguration(state_.Edited().configuration);
+    UpdateFramingAvailability();
     UpdateApplyAvailability();
 }
 

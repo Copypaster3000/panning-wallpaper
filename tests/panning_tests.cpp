@@ -461,6 +461,7 @@ void CheckCoverTransform(
 void TestTransforms() {
     using panning_wallpaper::CalculatePanTransform;
     using panning_wallpaper::FitMode;
+    using panning_wallpaper::HasFramingEffect;
     using panning_wallpaper::PanDirection;
     using panning_wallpaper::PanningConfiguration;
 
@@ -559,6 +560,50 @@ void TestTransforms() {
         noInactiveExcess, 0.25, 1920, 1080, 4000, 2000);
     CheckNear(noPositionEffect.offsetV, 0.0,
               "position has no effect without inactive-axis excess");
+
+    Check(!HasFramingEffect(
+              PanningConfiguration{
+                  PanDirection::Left, 90.0, FitMode::Pan, 0.75},
+              1920,
+              1080,
+              2000,
+              4000),
+          "fit-height sizing has no vertical framing effect");
+    Check(HasFramingEffect(
+              PanningConfiguration{
+                  PanDirection::Right, 90.0, FitMode::Cover, 0.75},
+              1920,
+              1080,
+              2000,
+              4000),
+          "horizontal cover exposes meaningful vertical framing");
+    Check(!HasFramingEffect(
+              PanningConfiguration{
+                  PanDirection::Right, 90.0, FitMode::Cover, 0.75},
+              1920,
+              1080,
+              4000,
+              2000),
+          "horizontal cover disables framing without vertical excess");
+    Check(HasFramingEffect(
+              PanningConfiguration{
+                  PanDirection::Down, 90.0, FitMode::Cover, 0.25},
+              1080,
+              1920,
+              4000,
+              2000),
+          "vertical cover exposes meaningful horizontal framing");
+    Check(!HasFramingEffect(
+              PanningConfiguration{
+                  PanDirection::Down, 90.0, FitMode::Cover, 0.25},
+              1080,
+              1920,
+              2000,
+              4000),
+          "vertical cover disables framing without horizontal excess");
+    Check(!HasFramingEffect(
+              PanningConfiguration{}, 0, 1080, 4000, 2000),
+          "framing is disabled for unavailable viewport dimensions");
 }
 
 }  // namespace

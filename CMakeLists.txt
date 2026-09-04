@@ -26,6 +26,7 @@ add_executable(PanningWallpaper WIN32
     src/settings_model.h
     src/settings_window.cpp
     src/settings_window.h
+    src/ui_palette.h
     src/window_coverage.cpp
     src/window_coverage.h
 )

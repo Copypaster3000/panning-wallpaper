@@ -2,6 +2,7 @@
 
 #include "image_decoder.h"
 #include "panning.h"
+#include "ui_palette.h"
 
 #include <windows.h>
 #include <d2d1.h>
@@ -27,6 +28,8 @@ public:
         std::wstring& error);
     void SetImage(DecodedImage image);
     void SetConfiguration(const PanningConfiguration& configuration) noexcept;
+    void SetPalette(const UiPalette& palette) noexcept;
+    [[nodiscard]] bool HasMeaningfulFraming() const noexcept;
     [[nodiscard]] HWND Window() const noexcept;
 
 private:
@@ -41,6 +44,7 @@ private:
         WPARAM parameter,
         LPARAM secondaryParameter);
     [[nodiscard]] HRESULT EnsureDeviceResources();
+    [[nodiscard]] HRESULT CreatePaletteResources();
     [[nodiscard]] HRESULT CreateBitmapResources();
     void ReleaseDeviceResources() noexcept;
     void Paint();
@@ -50,6 +54,7 @@ private:
     bool classRegistered_ = false;
     DecodedImage image_;
     PanningConfiguration configuration_;
+    UiPalette palette_ = kLightPalette;
     Microsoft::WRL::ComPtr<ID2D1Factory> drawingFactory_;
     Microsoft::WRL::ComPtr<IDWriteFactory> textFactory_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> emptyTextFormat_;

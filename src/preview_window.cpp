@@ -132,6 +132,32 @@ void PreviewWindow::SetConfiguration(
     }
 }
 
+void PreviewWindow::SetPalette(const UiPalette& palette) noexcept {
+    palette_ = palette;
+    if (renderTarget_ && FAILED(CreatePaletteResources())) {
+        ReleaseDeviceResources();
+    }
+    if (window_ != nullptr) {
+        InvalidateRect(window_, nullptr, FALSE);
+    }
+}
+
+bool PreviewWindow::HasMeaningfulFraming() const noexcept {
+    if (window_ == nullptr) {
+        return false;
+    }
+    RECT client{};
+    if (!GetClientRect(window_, &client)) {
+        return false;
+    }
+    return HasFramingEffect(
+        configuration_,
+        static_cast<std::uint32_t>(client.right - client.left),
+        static_cast<std::uint32_t>(client.bottom - client.top),
+        image_.width,
+        image_.height);
+}
+
 HWND PreviewWindow::Window() const noexcept {
     return window_;
 }
@@ -229,25 +255,38 @@ HRESULT PreviewWindow::EnsureDeviceResources() {
         return result;
     }
 
-    result = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0xEEEDEA), &backgroundBrush_);
-    if (SUCCEEDED(result)) {
-        result = renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(0xF8F7F5), &placeholderBrush_);
-    }
-    if (SUCCEEDED(result)) {
-        result = renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(0xDAD8D4), &borderBrush_);
-    }
-    if (SUCCEEDED(result)) {
-        result = renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(0x706D69), &textBrush_);
-    }
+    result = CreatePaletteResources();
     if (SUCCEEDED(result)) {
         result = CreateBitmapResources();
     }
     if (FAILED(result)) {
         ReleaseDeviceResources();
+    }
+    return result;
+}
+
+HRESULT PreviewWindow::CreatePaletteResources() {
+    textBrush_.Reset();
+    borderBrush_.Reset();
+    placeholderBrush_.Reset();
+    backgroundBrush_.Reset();
+    if (!renderTarget_) {
+        return S_OK;
+    }
+
+    HRESULT result = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(palette_.previewBackground), &backgroundBrush_);
+    if (SUCCEEDED(result)) {
+        result = renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(palette_.previewPlaceholder), &placeholderBrush_);
+    }
+    if (SUCCEEDED(result)) {
+        result = renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(palette_.border), &borderBrush_);
+    }
+    if (SUCCEEDED(result)) {
+        result = renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(palette_.secondaryText), &textBrush_);
     }
     return result;
 }
@@ -302,7 +341,7 @@ void PreviewWindow::Paint() {
     if (SUCCEEDED(resourceResult)) {
         const D2D1_SIZE_F size = renderTarget_->GetSize();
         renderTarget_->BeginDraw();
-        renderTarget_->Clear(D2D1::ColorF(0xF7F6F4));
+        renderTarget_->Clear(D2D1::ColorF(palette_.windowBackground));
         const D2D1_ROUNDED_RECT previewBounds = D2D1::RoundedRect(
             D2D1::RectF(0.5F, 0.5F, size.width - 0.5F, size.height - 0.5F),
             8.0F,

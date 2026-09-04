@@ -44,5 +44,11 @@ struct PanTransform {
     std::uint32_t viewportHeight,
     std::uint32_t imageWidth,
     std::uint32_t imageHeight) noexcept;
+[[nodiscard]] bool HasFramingEffect(
+    const PanningConfiguration& configuration,
+    std::uint32_t viewportWidth,
+    std::uint32_t viewportHeight,
+    std::uint32_t imageWidth,
+    std::uint32_t imageHeight) noexcept;
 
 }  // namespace panning_wallpaper
