@@ -56,6 +56,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap_;
     Microsoft::WRL::ComPtr<ID2D1BitmapBrush> bitmapBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> backgroundBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> placeholderBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> borderBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> textBrush_;
 };

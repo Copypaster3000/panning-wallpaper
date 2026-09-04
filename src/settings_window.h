@@ -43,6 +43,22 @@ private:
     void LayoutControls(int clientWidth, int clientHeight);
     void UpdateFonts();
     void ApplyFont(HWND control, HFONT font) const;
+    void PaintWindow();
+    void PaintStyledControl(HWND control);
+    void DrawSegmentControl(HWND control, HDC deviceContext, const RECT& bounds);
+    void DrawSliderControl(HWND control, HDC deviceContext, const RECT& bounds);
+    void DrawToggleControl(HWND control, HDC deviceContext, const RECT& bounds);
+    void DrawActionButton(HWND control, HDC deviceContext, const RECT& bounds);
+    void InvalidateStyledControls() const;
+    [[nodiscard]] bool InstallControlStyling(HWND control) const;
+    [[nodiscard]] bool IsPointerOver(HWND control) const noexcept;
+    static LRESULT CALLBACK StyledControlProcedure(
+        HWND control,
+        UINT message,
+        WPARAM wParam,
+        LPARAM lParam,
+        UINT_PTR subclassId,
+        DWORD_PTR referenceData);
     void SynchronizeControlsFromEditedState();
     void UpdateEditedConfigurationFromControls(int clickedControlId);
     void UpdateDurationFromEdit();
@@ -60,7 +76,6 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND window_ = nullptr;
 
-    HWND titleLabel_ = nullptr;
     PreviewWindow preview_;
     HWND imageLabel_ = nullptr;
     HWND imagePathEdit_ = nullptr;
@@ -84,8 +99,15 @@ private:
     HWND applyButton_ = nullptr;
 
     HFONT uiFont_ = nullptr;
-    HFONT titleFont_ = nullptr;
+    HFONT labelFont_ = nullptr;
+    HBRUSH windowBrush_ = nullptr;
+    HBRUSH panelBrush_ = nullptr;
+    HBRUSH controlBrush_ = nullptr;
     HBRUSH invalidEditBrush_ = nullptr;
+    RECT settingsPanelBounds_{};
+    RECT actionsPanelBounds_{};
+    RECT directionGroupBounds_{};
+    RECT fitGroupBounds_{};
     UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
     SettingsState state_;
     DecodedImage pendingFullImage_;

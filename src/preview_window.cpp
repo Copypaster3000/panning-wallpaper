@@ -78,7 +78,7 @@ bool PreviewWindow::Initialize(
         DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        15.0F,
+        14.0F,
         L"",
         &emptyTextFormat_);
     if (FAILED(result)) {
@@ -230,13 +230,24 @@ HRESULT PreviewWindow::EnsureDeviceResources() {
     }
 
     result = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0xD5D9DE), &borderBrush_);
+        D2D1::ColorF(0xEEEDEA), &backgroundBrush_);
     if (SUCCEEDED(result)) {
         result = renderTarget_->CreateSolidColorBrush(
-            D2D1::ColorF(0x59636E), &textBrush_);
+            D2D1::ColorF(0xF8F7F5), &placeholderBrush_);
+    }
+    if (SUCCEEDED(result)) {
+        result = renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0xDAD8D4), &borderBrush_);
+    }
+    if (SUCCEEDED(result)) {
+        result = renderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0x706D69), &textBrush_);
     }
     if (SUCCEEDED(result)) {
         result = CreateBitmapResources();
+    }
+    if (FAILED(result)) {
+        ReleaseDeviceResources();
     }
     return result;
 }
@@ -276,6 +287,8 @@ HRESULT PreviewWindow::CreateBitmapResources() {
 void PreviewWindow::ReleaseDeviceResources() noexcept {
     textBrush_.Reset();
     borderBrush_.Reset();
+    placeholderBrush_.Reset();
+    backgroundBrush_.Reset();
     bitmapBrush_.Reset();
     bitmap_.Reset();
     renderTarget_.Reset();
@@ -289,7 +302,13 @@ void PreviewWindow::Paint() {
     if (SUCCEEDED(resourceResult)) {
         const D2D1_SIZE_F size = renderTarget_->GetSize();
         renderTarget_->BeginDraw();
-        renderTarget_->Clear(D2D1::ColorF(0xF3F5F7));
+        renderTarget_->Clear(D2D1::ColorF(0xF7F6F4));
+        const D2D1_ROUNDED_RECT previewBounds = D2D1::RoundedRect(
+            D2D1::RectF(0.5F, 0.5F, size.width - 0.5F, size.height - 0.5F),
+            8.0F,
+            8.0F);
+        renderTarget_->FillRoundedRectangle(
+            previewBounds, backgroundBrush_.Get());
 
         if (bitmapBrush_ && image_.width != 0 && image_.height != 0) {
             const PanTransform transform = CalculatePanTransform(
@@ -318,23 +337,55 @@ void PreviewWindow::Paint() {
                 -transform.offsetV * size.height / transform.scaleV;
             bitmapBrush_->SetTransform(D2D1::Matrix3x2F(
                 scaleX, 0.0F, 0.0F, scaleY, offsetX, offsetY));
-            renderTarget_->FillRectangle(
-                D2D1::RectF(0.0F, 0.0F, size.width, size.height),
-                bitmapBrush_.Get());
+            renderTarget_->FillRoundedRectangle(
+                previewBounds, bitmapBrush_.Get());
         } else {
             constexpr wchar_t message[] = L"Choose an image to preview";
+            const float centerX = size.width / 2.0F;
+            const float centerY = size.height / 2.0F;
+            const D2D1_ROUNDED_RECT iconBounds = D2D1::RoundedRect(
+                D2D1::RectF(
+                    centerX - 14.0F,
+                    centerY - 30.0F,
+                    centerX + 14.0F,
+                    centerY - 10.0F),
+                2.0F,
+                2.0F);
+            renderTarget_->FillRoundedRectangle(
+                iconBounds, placeholderBrush_.Get());
+            renderTarget_->DrawRoundedRectangle(
+                iconBounds, textBrush_.Get(), 1.0F);
+            renderTarget_->DrawLine(
+                D2D1::Point2F(centerX - 10.0F, centerY - 14.0F),
+                D2D1::Point2F(centerX - 3.0F, centerY - 21.0F),
+                textBrush_.Get(),
+                1.0F);
+            renderTarget_->DrawLine(
+                D2D1::Point2F(centerX - 3.0F, centerY - 21.0F),
+                D2D1::Point2F(centerX + 3.0F, centerY - 15.0F),
+                textBrush_.Get(),
+                1.0F);
+            renderTarget_->DrawLine(
+                D2D1::Point2F(centerX + 3.0F, centerY - 15.0F),
+                D2D1::Point2F(centerX + 7.0F, centerY - 19.0F),
+                textBrush_.Get(),
+                1.0F);
+            renderTarget_->DrawLine(
+                D2D1::Point2F(centerX + 7.0F, centerY - 19.0F),
+                D2D1::Point2F(centerX + 11.0F, centerY - 14.0F),
+                textBrush_.Get(),
+                1.0F);
             renderTarget_->DrawTextW(
                 message,
                 static_cast<UINT32>(std::size(message) - 1),
                 emptyTextFormat_.Get(),
-                D2D1::RectF(0.0F, 0.0F, size.width, size.height),
+                D2D1::RectF(
+                    0.0F, centerY - 2.0F, size.width, centerY + 30.0F),
                 textBrush_.Get());
         }
 
-        renderTarget_->DrawRectangle(
-            D2D1::RectF(0.5F, 0.5F, size.width - 0.5F, size.height - 0.5F),
-            borderBrush_.Get(),
-            1.0F);
+        renderTarget_->DrawRoundedRectangle(
+            previewBounds, borderBrush_.Get(), 1.0F);
         const HRESULT drawResult = renderTarget_->EndDraw();
         if (drawResult == D2DERR_RECREATE_TARGET) {
             ReleaseDeviceResources();
