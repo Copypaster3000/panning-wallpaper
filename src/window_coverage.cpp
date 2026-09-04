@@ -28,27 +28,6 @@ WindowCoverageMonitor* activeMonitor = nullptr;
            name == L"Shell_TrayWnd" || name == L"Shell_SecondaryTrayWnd";
 }
 
-[[nodiscard]] bool IsReliablyOpaque(HWND window) {
-    const LONG_PTR extendedStyle = GetWindowLongPtrW(window, GWL_EXSTYLE);
-    if ((extendedStyle & WS_EX_TRANSPARENT) != 0) {
-        return false;
-    }
-    if ((extendedStyle & WS_EX_LAYERED) == 0) {
-        return true;
-    }
-
-    COLORREF colorKey = 0;
-    BYTE alpha = 0;
-    DWORD flags = 0;
-    if (!GetLayeredWindowAttributes(window, &colorKey, &alpha, &flags)) {
-        // Per-pixel UpdateLayeredWindow opacity is not cheaply knowable.
-        return false;
-    }
-
-    return (flags & LWA_COLORKEY) == 0 &&
-           (flags & LWA_ALPHA) != 0 && alpha == 255;
-}
-
 [[nodiscard]] bool TryGetVisibleBounds(HWND window, CoverageRectangle& bounds) {
     RECT rectangle{};
     if (FAILED(DwmGetWindowAttribute(
@@ -97,7 +76,7 @@ BOOL CALLBACK EnumerateOccludingWindows(HWND window, LPARAM parameter) {
     }
 
     CoverageRectangle bounds;
-    if (IsReliablyOpaque(window) && TryGetVisibleBounds(window, bounds)) {
+    if (TryGetVisibleBounds(window, bounds)) {
         context.occluders.push_back(bounds);
     }
     return TRUE;

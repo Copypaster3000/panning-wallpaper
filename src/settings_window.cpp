@@ -25,7 +25,7 @@ constexpr wchar_t kSettingsWindowClassName[] =
 constexpr wchar_t kSettingsWindowTitle[] = L"Panning Wallpaper";
 constexpr wchar_t kPauseCoveredLabel[] = L"Pause when fully covered";
 constexpr wchar_t kPauseCoveredNote[] =
-    L"(Transparent overlays won’t pause it)";
+    L"(Turn off for transparent windows)";
 constexpr DWORD kSettingsWindowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
 constexpr int kPreviewId = 101;
@@ -625,7 +625,7 @@ bool SettingsWindow::CreateControls(std::wstring& error) {
     pauseCheckBox_ = CreateControl(
         0,
         WC_BUTTONW,
-        L"Pause when fully covered (Transparent overlays won’t pause it)",
+        L"Pause when fully covered (Turn off for transparent windows)",
         WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         kPauseCoveredId);
     statusLabel_ = CreateControl(

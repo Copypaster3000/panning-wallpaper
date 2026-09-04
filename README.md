@@ -53,11 +53,12 @@ settings are not persisted between launches yet.
 
 ## Visibility-aware rendering
 
-Rendering automatically stops when the combined coverage of supported opaque
+Rendering automatically stops when the combined geometry of relevant visible
 top-level windows fully covers the entire wallpaper surface. Multiple windows
 are considered together, including across a multi-monitor surface, and
-rendering resumes automatically when any part becomes exposed. This behavior
-defaults to on and can be disabled for setups that use unusual overlays:
+rendering resumes automatically when any part becomes exposed. Transparent
+windows still count as covering; turn off **Pause when fully covered** to keep
+wallpaper motion visible behind them. This behavior defaults to on:
 
 ```text
 --pause-when-covered off
@@ -66,11 +67,6 @@ defaults to on and can be disabled for setups that use unusual overlays:
 Session lock and console-display-off states always pause rendering, regardless
 of that option. GPU resources remain resident while paused, and animation
 resumes at its current absolute-time phase rather than replaying hidden frames.
-
-Coverage detection excludes known transparent or ambiguous layered windows
-where practical. Windows does not provide a perfect general-purpose query for
-whether every pixel of an arbitrary window is opaque, so detection is
-intentionally conservative and may continue rendering in uncertain cases.
 
 ## Performance snapshot
 
