@@ -61,6 +61,25 @@ int PositionToSlider(double position) noexcept {
         std::lround(clamped * kMaximumPositionSliderValue));
 }
 
+int SliderValueFromTrackClick(
+    int minimum,
+    int maximum,
+    int clickX,
+    int trackLeft,
+    int trackRight) noexcept {
+    if (maximum <= minimum || trackRight <= trackLeft) {
+        return minimum;
+    }
+    const int clampedX = std::clamp(clickX, trackLeft, trackRight);
+    const double progress = static_cast<double>(clampedX - trackLeft) /
+        static_cast<double>(trackRight - trackLeft);
+    return std::clamp(
+        static_cast<int>(std::lround(
+            minimum + progress * static_cast<double>(maximum - minimum))),
+        minimum,
+        maximum);
+}
+
 bool TryParseGuiDuration(
     std::wstring_view text,
     int& durationSeconds) noexcept {

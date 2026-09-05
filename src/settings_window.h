@@ -57,7 +57,12 @@ private:
         HWND control, HDC deviceContext, const RECT& bounds);
     void DrawSpinnerControl(HWND control, HDC deviceContext, const RECT& bounds);
     void DrawActionButton(HWND control, HDC deviceContext, const RECT& bounds);
+    [[nodiscard]] RECT SliderTrackBounds(HWND control) const noexcept;
+    [[nodiscard]] RECT SliderInteractionBounds(HWND control) const noexcept;
     [[nodiscard]] RECT SliderThumbBounds(HWND control) const noexcept;
+    [[nodiscard]] bool HandleSliderPointerDown(
+        HWND control, POINT click) noexcept;
+    void UpdateEditedSliderFromControl(HWND control);
     void InvalidateSliderMovement(
         HWND control, const RECT& previousThumbBounds) const noexcept;
     void InvalidateStyledControls() const;

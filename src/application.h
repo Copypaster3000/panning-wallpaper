@@ -54,6 +54,7 @@ public:
 private:
     static constexpr int kExitHotKeyId = 1;
     static constexpr UINT kCoverageChangedMessage = WM_APP + 1;
+    static constexpr UINT_PTR kTrayMenuFrameTimerId = 2;
 
     enum class PauseReason : unsigned int {
         CoveredByWindows = 1U << 0,
@@ -116,6 +117,8 @@ private:
     TrayIcon trayIcon_;
     UINT taskbarCreatedMessage_ = 0;
     bool guiHotKeyRegistered_ = false;
+    bool trayMenuFrameTimerActive_ = false;
+    std::chrono::steady_clock::time_point nextTrayMenuFrame_{};
     HPOWERNOTIFY displayPowerNotification_ = nullptr;
     unsigned int pauseReasons_ = 0;
     bool wallpaperClassRegistered_ = false;

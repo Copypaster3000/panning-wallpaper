@@ -205,6 +205,7 @@ void TestSettingsModel() {
     using panning_wallpaper::PositionFromSlider;
     using panning_wallpaper::PositionToSlider;
     using panning_wallpaper::SettingsState;
+    using panning_wallpaper::SliderValueFromTrackClick;
     using panning_wallpaper::TryParseGuiDuration;
 
     SettingsState state;
@@ -269,6 +270,21 @@ void TestSettingsModel() {
     Check(PositionToSlider(-1.0e100) == 0 &&
               PositionToSlider(1.0e100) == 100,
           "position slider conversion safely clamps large values");
+
+    Check(SliderValueFromTrackClick(10, 600, 20, 20, 120) == 10,
+          "duration track start maps to minimum");
+    Check(SliderValueFromTrackClick(10, 600, 70, 20, 120) == 305,
+          "duration track midpoint maps naturally");
+    Check(SliderValueFromTrackClick(10, 600, 120, 20, 120) == 600,
+          "duration track end maps to maximum");
+    Check(SliderValueFromTrackClick(10, 600, 53, 20, 120) == 205,
+          "duration arbitrary track click rounds to an integer second");
+    Check(SliderValueFromTrackClick(0, 100, 25, 25, 225) == 0 &&
+              SliderValueFromTrackClick(0, 100, 125, 25, 225) == 50 &&
+              SliderValueFromTrackClick(0, 100, 225, 25, 225) == 100,
+          "framing track start, midpoint, and end map exactly");
+    Check(SliderValueFromTrackClick(0, 100, 250, 50, 450) == 50,
+          "DPI-scaled track coordinates preserve click mapping");
 
     Check(IsValidGuiConfiguration(state.Edited().configuration),
           "default GUI configuration is valid");

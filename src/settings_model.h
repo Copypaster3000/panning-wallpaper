@@ -35,6 +35,12 @@ private:
 [[nodiscard]] int DurationToSlider(double durationSeconds) noexcept;
 [[nodiscard]] double PositionFromSlider(int sliderValue) noexcept;
 [[nodiscard]] int PositionToSlider(double position) noexcept;
+[[nodiscard]] int SliderValueFromTrackClick(
+    int minimum,
+    int maximum,
+    int clickX,
+    int trackLeft,
+    int trackRight) noexcept;
 [[nodiscard]] bool TryParseGuiDuration(
     std::wstring_view text,
     int& durationSeconds) noexcept;

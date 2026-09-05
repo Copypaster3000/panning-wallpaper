@@ -72,6 +72,10 @@ Application::Application() = default;
 
 Application::~Application() {
     shuttingDown_ = true;
+    if (trayMenuFrameTimerActive_ && settingsWindow_) {
+        KillTimer(settingsWindow_->Window(), kTrayMenuFrameTimerId);
+        trayMenuFrameTimerActive_ = false;
+    }
     StopWallpaperSession();
     trayIcon_.Shutdown();
     if (guiHotKeyRegistered_ && settingsWindow_) {
@@ -256,6 +260,10 @@ void Application::HideSettings() {
 void Application::ExitApplication() {
     if (shuttingDown_) return;
     shuttingDown_ = true;
+    if (trayMenuFrameTimerActive_) {
+        KillTimer(settingsWindow_->Window(), kTrayMenuFrameTimerId);
+        trayMenuFrameTimerActive_ = false;
+    }
     StopWallpaper();
     trayIcon_.Shutdown();
     if (guiHotKeyRegistered_) {
@@ -314,6 +322,44 @@ bool Application::HandleSettingsMessage(UINT message, WPARAM wParam, LPARAM lPar
     }
     if (message == WM_HOTKEY && wParam == kExitHotKeyId) {
         ExitApplication();
+        return true;
+    }
+    if (message == WM_ENTERMENULOOP && wParam != FALSE) {
+        if (wallpaperRunning_ && !IsRenderingPaused()) {
+            // TrackPopupMenuEx dispatches window messages in its modal loop but
+            // cannot service the outer scheduler's waitable-timer handle.
+            nextTrayMenuFrame_ = std::chrono::steady_clock::now();
+            trayMenuFrameTimerActive_ = SetTimer(
+                settingsWindow_->Window(),
+                kTrayMenuFrameTimerId,
+                static_cast<UINT>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        kFrameInterval / 2).count()),
+                nullptr) != 0;
+        }
+        return false;
+    }
+    if (message == WM_EXITMENULOOP && wParam != FALSE) {
+        if (trayMenuFrameTimerActive_) {
+            KillTimer(settingsWindow_->Window(), kTrayMenuFrameTimerId);
+            trayMenuFrameTimerActive_ = false;
+        }
+        return false;
+    }
+    if (message == WM_TIMER && wParam == kTrayMenuFrameTimerId) {
+        if (trayMenuFrameTimerActive_ && wallpaperRunning_ &&
+            !IsRenderingPaused()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now < nextTrayMenuFrame_) return true;
+            const HRESULT result = RenderCurrentFrame();
+            if (FAILED(result)) {
+                CloseAfterFailure(L"Tray-menu animation frame presentation", result);
+            }
+            const auto afterRender = std::chrono::steady_clock::now();
+            const auto missedIntervals =
+                (afterRender - nextTrayMenuFrame_) / kFrameInterval + 1;
+            nextTrayMenuFrame_ += kFrameInterval * missedIntervals;
+        }
         return true;
     }
     if (message != TrayIcon::kCallbackMessage) return false;

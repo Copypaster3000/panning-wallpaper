@@ -441,26 +441,8 @@ LRESULT SettingsWindow::HandleMessage(
     }
     case WM_HSCROLL: {
         const HWND control = reinterpret_cast<HWND>(lParam);
-        if (control == durationSlider_) {
-            const int value = static_cast<int>(
-                SendMessageW(durationSlider_, TBM_GETPOS, 0, 0));
-            state_.Edited().configuration.loopDurationSeconds =
-                DurationFromSlider(value);
-            updatingControls_ = true;
-            SendMessageW(durationSpinner_, UDM_SETPOS32, 0, value);
-            const std::wstring text = std::to_wstring(value);
-            SetWindowTextW(durationEdit_, text.c_str());
-            updatingControls_ = false;
-            durationValid_ = true;
-            InvalidateRect(durationEdit_, nullptr, TRUE);
-            UpdateApplyAvailability();
-            return 0;
-        }
-        if (control == positionSlider_) {
-            const int value = static_cast<int>(
-                SendMessageW(positionSlider_, TBM_GETPOS, 0, 0));
-            state_.Edited().configuration.position = PositionFromSlider(value);
-            preview_.SetConfiguration(state_.Edited().configuration);
+        if (control == durationSlider_ || control == positionSlider_) {
+            UpdateEditedSliderFromControl(control);
             return 0;
         }
         break;
@@ -492,12 +474,16 @@ LRESULT SettingsWindow::HandleMessage(
             return reinterpret_cast<LRESULT>(controlBrush_);
         }
         SetBkColor(deviceContext, ToColorRef(palette_.panelBackground));
+        const bool framingText = id == kPositionLabelId ||
+            id == kPositionStartId || id == kPositionEndId;
+        const bool framingDisabled = framingText &&
+            IsWindowEnabled(positionSlider_) == FALSE;
         const bool secondary = id == kPositionStartId || id == kPositionEndId ||
             id == kSecondsLabelId || id == kStatusId || id == kImagePathId;
         SetTextColor(
             deviceContext,
             ToColorRef(
-                !IsWindowEnabled(control)
+                framingDisabled || !IsWindowEnabled(control)
                     ? palette_.disabledText
                     : (secondary ? palette_.secondaryText
                                  : palette_.primaryText)));
@@ -1245,15 +1231,14 @@ void SettingsWindow::DrawSliderControl(
     FillRect(deviceContext, &bounds, panelBrush_);
     const bool enabled = IsWindowEnabled(control) != FALSE;
     const bool hovered = IsPointerOver(control);
-    const int thumbRadius = Scale(8);
-    const int trackLeft = bounds.left + thumbRadius + Scale(2);
-    const int trackRight = bounds.right - thumbRadius - Scale(2);
+    const RECT trackBounds = SliderTrackBounds(control);
+    const int trackLeft = trackBounds.left;
+    const int trackRight = trackBounds.right;
     const int trackY = (bounds.top + bounds.bottom) / 2;
 
-    RECT track{
-        trackLeft, trackY - Scale(1), trackRight, trackY + Scale(2)};
+    RECT track{trackLeft, trackY - Scale(1), trackRight, trackY + Scale(2)};
     const COLORREF trackColor = ToColorRef(
-        enabled ? palette_.sliderTrack : palette_.disabledSurface);
+        enabled ? palette_.sliderTrack : palette_.disabledText);
     SetDCBrushColor(deviceContext, trackColor);
     FillRect(
         deviceContext,
@@ -1583,6 +1568,31 @@ void SettingsWindow::DrawActionButton(
     }
 }
 
+RECT SettingsWindow::SliderTrackBounds(HWND control) const noexcept {
+    RECT bounds{};
+    GetClientRect(control, &bounds);
+    const int thumbRadius = Scale(8);
+    const int left = bounds.left + thumbRadius + Scale(2);
+    int right = bounds.right - thumbRadius - Scale(2);
+    // An even span gives the integer center pixel the exact range midpoint at
+    // every DPI while changing the right inset by at most one pixel.
+    if ((right - left) % 2 != 0) --right;
+    return RECT{
+        left,
+        (bounds.top + bounds.bottom) / 2 - Scale(1),
+        right,
+        (bounds.top + bounds.bottom) / 2 + Scale(2)};
+}
+
+RECT SettingsWindow::SliderInteractionBounds(HWND control) const noexcept {
+    RECT bounds = SliderTrackBounds(control);
+    const int thumbRadius = Scale(8);
+    bounds.top -= thumbRadius;
+    bounds.bottom += thumbRadius;
+    ++bounds.right;  // PtInRect excludes the right edge; the track endpoint is usable.
+    return bounds;
+}
+
 RECT SettingsWindow::SliderThumbBounds(HWND control) const noexcept {
     RECT bounds{};
     GetClientRect(control, &bounds);
@@ -1593,8 +1603,9 @@ RECT SettingsWindow::SliderThumbBounds(HWND control) const noexcept {
     const int position = static_cast<int>(
         SendMessageW(control, TBM_GETPOS, 0, 0));
     const int thumbRadius = Scale(8);
-    const int trackLeft = bounds.left + thumbRadius + Scale(2);
-    const int trackRight = bounds.right - thumbRadius - Scale(2);
+    const RECT track = SliderTrackBounds(control);
+    const int trackLeft = track.left;
+    const int trackRight = track.right;
     const double progress = maximum > minimum
         ? static_cast<double>(position - minimum) /
               static_cast<double>(maximum - minimum)
@@ -1608,6 +1619,56 @@ RECT SettingsWindow::SliderThumbBounds(HWND control) const noexcept {
         thumbX + thumbRadius + 1,
         thumbY + thumbRadius + 1};
     return thumbBounds;
+}
+
+bool SettingsWindow::HandleSliderPointerDown(
+    HWND control, POINT click) noexcept {
+    if (control != durationSlider_ && control != positionSlider_) {
+        return false;
+    }
+    if (IsWindowEnabled(control) == FALSE) {
+        return true;
+    }
+    const RECT thumbBounds = SliderThumbBounds(control);
+    if (PtInRect(&thumbBounds, click)) {
+        return false;
+    }
+    SetFocus(control);
+    const RECT interactionBounds = SliderInteractionBounds(control);
+    if (!PtInRect(&interactionBounds, click)) {
+        return true;
+    }
+    const RECT track = SliderTrackBounds(control);
+    const int minimum = static_cast<int>(
+        SendMessageW(control, TBM_GETRANGEMIN, 0, 0));
+    const int maximum = static_cast<int>(
+        SendMessageW(control, TBM_GETRANGEMAX, 0, 0));
+    const int value = SliderValueFromTrackClick(
+        minimum, maximum, click.x, track.left, track.right);
+    // TBM_SETPOS is subclassed to invalidate exactly the old/new custom thumb
+    // bounds, preserving the existing tracer-free bounded repaint behavior.
+    SendMessageW(control, TBM_SETPOS, TRUE, value);
+    UpdateEditedSliderFromControl(control);
+    return true;
+}
+
+void SettingsWindow::UpdateEditedSliderFromControl(HWND control) {
+    const int value = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+    if (control == durationSlider_) {
+        state_.Edited().configuration.loopDurationSeconds =
+            DurationFromSlider(value);
+        updatingControls_ = true;
+        SendMessageW(durationSpinner_, UDM_SETPOS32, 0, value);
+        const std::wstring text = std::to_wstring(value);
+        SetWindowTextW(durationEdit_, text.c_str());
+        updatingControls_ = false;
+        durationValid_ = true;
+        InvalidateRect(durationEdit_, nullptr, TRUE);
+        UpdateApplyAvailability();
+    } else if (control == positionSlider_) {
+        state_.Edited().configuration.position = PositionFromSlider(value);
+        preview_.SetConfiguration(state_.Edited().configuration);
+    }
 }
 
 void SettingsWindow::InvalidateSliderMovement(
@@ -1728,6 +1789,10 @@ LRESULT CALLBACK SettingsWindow::StyledControlProcedure(
             WM_CHANGEUISTATE,
             MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS),
             0);
+        if (self->HandleSliderPointerDown(
+                control, POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)})) {
+            return 0;
+        }
         [[fallthrough]];
     case WM_LBUTTONUP:
     case WM_KEYDOWN:
@@ -1850,12 +1915,13 @@ void SettingsWindow::UpdateDirectionDependentControls() {
 
 void SettingsWindow::UpdateFramingAvailability() {
     const bool enabled = preview_.HasMeaningfulFraming();
-    const std::array framingControls{
-        positionLabel_, positionStartLabel_, positionSlider_, positionEndLabel_};
-    for (HWND control : framingControls) {
-        if ((IsWindowEnabled(control) != FALSE) != enabled) {
-            EnableWindow(control, enabled ? TRUE : FALSE);
-        }
+    if ((IsWindowEnabled(positionSlider_) != FALSE) != enabled) {
+        // Keep static text enabled so Windows preserves its exact typography;
+        // WM_CTLCOLORSTATIC supplies the quieter framing color instead.
+        EnableWindow(positionSlider_, enabled ? TRUE : FALSE);
+        InvalidateRect(positionLabel_, nullptr, FALSE);
+        InvalidateRect(positionStartLabel_, nullptr, FALSE);
+        InvalidateRect(positionEndLabel_, nullptr, FALSE);
     }
 }
 
